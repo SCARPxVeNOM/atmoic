@@ -11,5 +11,9 @@ export default defineConfig({
       // Browser polyfills for Solana libs
       buffer: "buffer",
     },
+    dedupe: ["viem"],
+  },
+  optimizeDeps: {
+    exclude: ["@privy-io/react-auth"],
   },
 });

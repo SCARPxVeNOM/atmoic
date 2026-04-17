@@ -1,4 +1,4 @@
-import { FC, useState } from "react";
+import { FC, useEffect, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { VersionedTransaction } from "@solana/web3.js";
 import { PositionView } from "../hooks/usePosition";
@@ -36,12 +36,12 @@ export const ProPanel: FC<{
   const [optimistic, setOptimistic] = useState<{ side: string; value: number } | null>(null);
 
   // Fetch vault risk on mount
-  useState(() => {
+  useEffect(() => {
     fetch(`${API_BASE}/vault/risk`)
       .then(r => r.json())
       .then(setVaultRisk)
       .catch(() => {});
-  });
+  }, []);
 
   const notional = Number(collateral) * solPrice * leverage;
 
