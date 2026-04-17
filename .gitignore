@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+.pnp.*
+.yarn/
+
+# Build outputs
+target/
+dist/
+.next/
+out/
+
+# Solana
+test-ledger/
+*.so
+
+# Secrets — NEVER commit these
+deploy-keypair.json
+*-keypair.json
+.env
+.env.local
+.env.*.local
+backend/.env
+app/.env.local
+
+# Temporary / generated
+tmp_*.json
+reserves.json
+*.log
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Cargo
+.cargo/
+
+# Claude internal
+.claude/

@@ -1,0 +1,18 @@
+{
+  "generatedAt": "2026-04-16T11:03:57.661Z",
+  "symbol": "Crypto.SOL/USD",
+  "source": "Pyth MCP (free tier, no Pro key)",
+  "sampleBars": 500,
+  "resolution": "4h",
+  "periodDays": 90,
+  "annualizedVolBps": 7364,
+  "circuitBreakerThresholdBps": 1500,
+  "circuitBreakerSafe": false,
+  "maxSingleCandleDrawdownPct": 15.853810652363737,
+  "spreadTierDistribution": {
+    "low": 179,
+    "med": 195,
+    "high": 90,
+    "extreme": 35
+  }
+}

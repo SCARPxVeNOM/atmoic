@@ -1,0 +1,18 @@
+[package]
+name = "atomic_perps"
+version = "0.1.0"
+description = "Atomic cross-protocol execution layer for perpetual futures on Solana"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "atomic_perps"
+
+[features]
+default = []
+kamino-cpi = []
+mock-oracle = []
+dfba = []
+
+[dependencies]
+solana-program = "=1.18.26"

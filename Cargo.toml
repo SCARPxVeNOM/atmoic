@@ -1,0 +1,21 @@
+[workspace]
+members = [
+    "programs/atomic_perps"
+]
+resolver = "2"
+
+[profile.release]
+opt-level = "z"
+overflow-checks = false
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+debug = false
+debug-assertions = false
+incremental = false
+
+[profile.release.build-override]
+opt-level = 3
+incremental = false
+codegen-units = 1
