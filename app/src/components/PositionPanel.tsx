@@ -2,6 +2,7 @@ import { FC, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { VersionedTransaction } from "@solana/web3.js";
 import { PositionView } from "../hooks/usePosition";
+import { useCollateralTypes } from "../hooks/useCollateralTypes";
 import { API_BASE } from "../config";
 import { describeTransaction } from "../lib/tx-description";
 
@@ -17,6 +18,9 @@ export const PositionPanel: FC<{
   const [leverage, setLeverage] = useState(3);
   const [side, setSide] = useState<"Long" | "Short">("Long");
   const [market, setMarket] = useState("SOL-PERP");
+  const [useHedge, setUseHedge] = useState(false);
+  const [collateralType, setCollateralType] = useState("SOL");
+  const collateralTypes = useCollateralTypes();
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [optimistic, setOptimistic] = useState<{ side: string; value: number } | null>(null);
@@ -65,13 +69,14 @@ export const PositionPanel: FC<{
 
       const collateralLamports = BigInt(Math.floor(Number(collateral) * 1e9));
       const borrowUsdc = BigInt(Math.floor(Number(collateral) * solPrice * (leverage - 1) * 1e6));
+      const hedgeAmount = useHedge ? BigInt(Math.floor(Number(borrowUsdc) * 25 / 100)) : 0n;
       const sig = await sendBuiltTx("/build-tx/open", {
         wallet: publicKey.toBase58(),
         collateralAmount: collateralLamports.toString(),
         borrowAmount: borrowUsdc.toString(),
         side,
         leverageBps: leverage * 1000,
-        hedgeAmount: "0",
+        hedgeAmount: hedgeAmount.toString(),
         useKamino: true,
         market,
       });
@@ -216,8 +221,35 @@ export const PositionPanel: FC<{
         </button>
       </div>
 
+      {/* Collateral type selector */}
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-slate-500">Collateral</span>
+        <select
+          value={collateralType}
+          onChange={(e) => setCollateralType(e.target.value)}
+          className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300"
+        >
+          {collateralTypes.filter(c => c.enabled).map(c => (
+            <option key={c.type} value={c.type}>{c.label} ({c.haircutPct}% haircut)</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Hedge toggle */}
+      <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={useHedge}
+          onChange={(e) => setUseHedge(e.target.checked)}
+          className="rounded"
+          disabled={!publicKey}
+        />
+        Spot hedge (25% via Jupiter)
+      </label>
+
       <div className="text-xs text-slate-500">
         Notional: <span className="font-mono text-slate-300">${notional.toFixed(2)}</span>
+        {useHedge && <span className="ml-2 text-indigo-400">+ 25% hedged</span>}
       </div>
 
       {confirmDesc ? (

@@ -254,6 +254,11 @@ export function findQueueShardPda(market: number, side: number, shard: number): 
   );
 }
 
+/** Deterministic shard routing per M-3: user_pubkey[0] % 8 */
+export function getShardIndex(user: PublicKey): number {
+  return user.toBuffer()[0] % 8;
+}
+
 // ----- execute_batch (DFBA) -----
 
 export function buildExecuteBatchIx(args: {

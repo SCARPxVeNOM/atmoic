@@ -22,6 +22,9 @@ import { fetchSwitchboardPrice } from "../lib/switchboard";
 import {
   buildAtomicCloseIx,
   buildAtomicOpenIx,
+  buildPlaceOrderIx,
+  buildCancelOrderIx,
+  findQueueShardPda,
   Side,
 } from "../lib/ix-builders";
 import {
@@ -34,7 +37,7 @@ import { countAccounts } from "../lib/tx-builder";
 import { getMarket } from "../lib/market-registry";
 import { getPsfStatus } from "../lib/psf";
 import { liquidatorStats } from "./liquidator";
-import { compute8hTwap, computeFundingRate } from "../lib/funding";
+import { compute8hTwap, computeFundingRate, getFundingHistory } from "../lib/funding";
 import { breakerState } from "./circuit-breaker";
 import { crankStats } from "./crank";
 
@@ -443,6 +446,101 @@ app.get("/funding/sol", async (_req, res) => {
     const spotPrice = Number(price6dp) / 1e6;
     const { rate8h, rateAnnualized } = computeFundingRate(spotPrice, twapPrice);
     res.json({ rate: rateAnnualized, rate8h, twapPrice, spotPrice, sampleCount });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.get("/funding/history", (_req, res) => {
+  try {
+    res.json(getFundingHistory());
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// Per-wallet DFBA rate limiter (A-01 R-3): 5-batch cooldown on side switch
+const walletOrderHistory = new Map<string, { side: string; ts: number }>();
+const RATE_LIMIT_COOLDOWN_MS = 500; // 5 batches × 100ms
+
+app.post("/build-tx/place-order", async (req, res) => {
+  try {
+    const { wallet, price, size, side } = req.body ?? {};
+    if (!wallet || !price || !size || !side) {
+      return res.status(400).json({ error: "wallet, price, size, side required" });
+    }
+    const now = Date.now();
+    const prev = walletOrderHistory.get(wallet);
+    if (prev && prev.side !== side && now - prev.ts < RATE_LIMIT_COOLDOWN_MS) {
+      return res.status(429).json({
+        error: "rate_limited",
+        message: "Side switch cooldown — wait before placing opposite order",
+      });
+    }
+    walletOrderHistory.set(wallet, { side, ts: now });
+
+    const user = new PublicKey(wallet);
+    const shardIdx = user.toBuffer()[0] % 8;
+    const [queueShard] = findQueueShardPda(0, side === "ask" ? 1 : 0, shardIdx);
+
+    const ix = buildPlaceOrderIx({
+      user,
+      queueShard,
+      price: BigInt(price),
+      size: BigInt(size),
+    });
+
+    const [{ blockhash, lastValidBlockHeight }, lookupTables] = await Promise.all([
+      connection.getLatestBlockhash(),
+      getAlt(),
+    ]);
+
+    const message = new TransactionMessage({
+      payerKey: user,
+      recentBlockhash: blockhash,
+      instructions: [ix],
+    }).compileToV0Message(lookupTables);
+
+    const vtx = new VersionedTransaction(message);
+    res.json({
+      tx: Buffer.from(vtx.serialize()).toString("base64"),
+      blockhash,
+      lastValidBlockHeight,
+      shard: shardIdx,
+    });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.post("/build-tx/cancel-order", async (req, res) => {
+  try {
+    const { wallet, side } = req.body ?? {};
+    if (!wallet || !side) return res.status(400).json({ error: "wallet, side required" });
+
+    const user = new PublicKey(wallet);
+    const shardIdx = user.toBuffer()[0] % 8;
+    const [queueShard] = findQueueShardPda(0, side === "ask" ? 1 : 0, shardIdx);
+
+    const ix = buildCancelOrderIx({ user, queueShard });
+
+    const [{ blockhash, lastValidBlockHeight }, lookupTables] = await Promise.all([
+      connection.getLatestBlockhash(),
+      getAlt(),
+    ]);
+
+    const message = new TransactionMessage({
+      payerKey: user,
+      recentBlockhash: blockhash,
+      instructions: [ix],
+    }).compileToV0Message(lookupTables);
+
+    const vtx = new VersionedTransaction(message);
+    res.json({
+      tx: Buffer.from(vtx.serialize()).toString("base64"),
+      blockhash,
+      lastValidBlockHeight,
+    });
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }

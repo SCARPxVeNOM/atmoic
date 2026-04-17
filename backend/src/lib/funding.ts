@@ -62,6 +62,17 @@ export function computeFundingRate(markPrice: number, indexPrice: number): {
   return { rate8h, rateAnnualized };
 }
 
+/** Return recent samples for the funding history API. */
+export function getFundingHistory(): { timestamp: number; price: number; rate: number }[] {
+  if (samples.length < 2) return [];
+  const { twapPrice } = compute8hTwap();
+  return samples.map(s => {
+    const spot = Number(s.price6dp) / 1e6;
+    const { rate8h } = computeFundingRate(spot, twapPrice || spot);
+    return { timestamp: s.timestamp, price: spot, rate: rate8h };
+  });
+}
+
 /** Start the sample collection loop. */
 export function startFundingCollector(): void {
   collectSample(); // immediate first sample

@@ -27,12 +27,15 @@ export interface GlobalConfigData {
 export interface PositionData {
   owner: PublicKey;
   perpMarket: PublicKey;
+  collateralMint: PublicKey;
+  kaminoObligation: PublicKey;
   collateralAmount: bigint;
   borrowAmountUsdc: bigint;
   perpSide: Side;
   perpSize: bigint;
   entryPrice: bigint;
   openedAt: bigint;
+  hedgeAmount: bigint;
   isOpen: boolean;
   bump: number;
 }
@@ -88,16 +91,30 @@ export function decodeGlobalConfig(data: Buffer): GlobalConfigData {
 
 export function decodePosition(data: Buffer): PositionData {
   const r = new Reader(data);
+  const V1_SPACE = 8 + 107; // disc + original fields
+  const V2_SPACE = 8 + 179; // disc + new fields
+  const owner = r.pk();
+  const perpMarket = r.pk();
+  // V2 fields: collateral_mint + kamino_obligation (64 bytes) inserted here
+  let collateralMint = PublicKey.default;
+  let kaminoObligation = PublicKey.default;
+  if (data.length >= V2_SPACE) {
+    collateralMint = r.pk();
+    kaminoObligation = r.pk();
+  }
+  const collateralAmount = r.u64();
+  const borrowAmountUsdc = r.u64();
+  const perpSide = r.u8() as Side;
+  const perpSize = r.u64();
+  const entryPrice = r.u64();
+  const openedAt = r.i64();
+  // V2 field: hedge_amount after opened_at
+  const hedgeAmount = data.length >= V2_SPACE ? r.u64() : 0n;
+  const isOpen = r.bool();
+  const bump = r.u8();
   return {
-    owner: r.pk(),
-    perpMarket: r.pk(),
-    collateralAmount: r.u64(),
-    borrowAmountUsdc: r.u64(),
-    perpSide: r.u8() as Side,
-    perpSize: r.u64(),
-    entryPrice: r.u64(),
-    openedAt: r.i64(),
-    isOpen: r.bool(),
-    bump: r.u8(),
+    owner, perpMarket, collateralMint, kaminoObligation,
+    collateralAmount, borrowAmountUsdc, perpSide, perpSize,
+    entryPrice, openedAt, hedgeAmount, isOpen, bump,
   };
 }

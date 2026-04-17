@@ -151,6 +151,12 @@ pub fn process(
     let oi_cap = config.total_usdc_reserve * 80 / 100;
     ensure!(new_total_oi <= oi_cap, AtomicPerpsError::TVLCapExceeded);
 
+    // -------- 3c. PSF health check — warn if balance < 5% of reserve (F-02) --------
+    let min_psf = config.total_usdc_reserve / 20;
+    if config.psf_balance < min_psf {
+        crate::events::emit_psf_low(config.psf_balance, min_psf);
+    }
+
     // -------- 4. Collateral: user -> sol_vault --------
     spl_transfer(token_program, user_sol_account, sol_vault, user, params.collateral_amount)?;
 
@@ -206,12 +212,15 @@ pub fn process(
     let position = Position {
         owner: user_key,
         perp_market: *pyth_price_feed.key,
+        collateral_mint: config.sol_mint,
+        kamino_obligation: Pubkey::default(),
         collateral_amount: params.collateral_amount,
         borrow_amount_usdc: params.borrow_amount,
         perp_side: params.perp_side,
         perp_size,
         entry_price: sol_price_6dp,
         opened_at: now,
+        hedge_amount: params.hedge_amount,
         is_open: true,
         bump: position_bump,
     };

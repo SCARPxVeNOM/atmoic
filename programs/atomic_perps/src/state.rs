@@ -118,45 +118,71 @@ impl GlobalConfig {
 pub struct Position {
     pub owner: Pubkey,
     pub perp_market: Pubkey,
+    pub collateral_mint: Pubkey,
+    pub kamino_obligation: Pubkey,
     pub collateral_amount: u64,
     pub borrow_amount_usdc: u64,
     pub perp_side: Side,
     pub perp_size: u64,
     pub entry_price: u64,
     pub opened_at: i64,
+    pub hedge_amount: u64,
     pub is_open: bool,
     pub bump: u8,
 }
 
 impl Position {
-    pub const INIT_SPACE: usize = 107; // 32+32 + 8+8+1+8+8+8+1+1
+    pub const V1_SPACE: usize = 107; // Original layout without new fields
+    pub const INIT_SPACE: usize = 179; // V1 + 32(collateral_mint) + 32(kamino_obligation) + 8(hedge_amount)
 
     pub fn deserialize(data: &[u8]) -> Option<Self> {
-        if data.len() < Self::INIT_SPACE { return None; }
+        if data.len() < Self::V1_SPACE { return None; }
         let mut o = 0;
         let owner = Pubkey::new_from_array(data[o..o+32].try_into().unwrap()); o += 32;
         let perp_market = Pubkey::new_from_array(data[o..o+32].try_into().unwrap()); o += 32;
+
+        // V2 fields: collateral_mint, kamino_obligation inserted here
+        let (collateral_mint, kamino_obligation) = if data.len() >= Self::INIT_SPACE {
+            let cm = Pubkey::new_from_array(data[o..o+32].try_into().unwrap()); o += 32;
+            let ko = Pubkey::new_from_array(data[o..o+32].try_into().unwrap()); o += 32;
+            (cm, ko)
+        } else {
+            (Pubkey::default(), Pubkey::default())
+        };
+
         let collateral_amount = u64::from_le_bytes(data[o..o+8].try_into().unwrap()); o += 8;
         let borrow_amount_usdc = u64::from_le_bytes(data[o..o+8].try_into().unwrap()); o += 8;
         let perp_side = Side::from_u8(data[o])?; o += 1;
         let perp_size = u64::from_le_bytes(data[o..o+8].try_into().unwrap()); o += 8;
         let entry_price = u64::from_le_bytes(data[o..o+8].try_into().unwrap()); o += 8;
         let opened_at = i64::from_le_bytes(data[o..o+8].try_into().unwrap()); o += 8;
+
+        // V2: hedge_amount after opened_at
+        let hedge_amount = if data.len() >= Self::INIT_SPACE {
+            let v = u64::from_le_bytes(data[o..o+8].try_into().unwrap()); o += 8;
+            v
+        } else {
+            0
+        };
+
         let is_open = data[o] != 0; o += 1;
         let bump = data[o];
-        Some(Self { owner, perp_market, collateral_amount, borrow_amount_usdc, perp_side, perp_size, entry_price, opened_at, is_open, bump })
+        Some(Self { owner, perp_market, collateral_mint, kamino_obligation, collateral_amount, borrow_amount_usdc, perp_side, perp_size, entry_price, opened_at, hedge_amount, is_open, bump })
     }
 
     pub fn serialize_into(&self, buf: &mut [u8]) {
         let mut o = 0;
         buf[o..o+32].copy_from_slice(self.owner.as_ref()); o += 32;
         buf[o..o+32].copy_from_slice(self.perp_market.as_ref()); o += 32;
+        buf[o..o+32].copy_from_slice(self.collateral_mint.as_ref()); o += 32;
+        buf[o..o+32].copy_from_slice(self.kamino_obligation.as_ref()); o += 32;
         buf[o..o+8].copy_from_slice(&self.collateral_amount.to_le_bytes()); o += 8;
         buf[o..o+8].copy_from_slice(&self.borrow_amount_usdc.to_le_bytes()); o += 8;
         buf[o] = self.perp_side as u8; o += 1;
         buf[o..o+8].copy_from_slice(&self.perp_size.to_le_bytes()); o += 8;
         buf[o..o+8].copy_from_slice(&self.entry_price.to_le_bytes()); o += 8;
         buf[o..o+8].copy_from_slice(&self.opened_at.to_le_bytes()); o += 8;
+        buf[o..o+8].copy_from_slice(&self.hedge_amount.to_le_bytes()); o += 8;
         buf[o] = self.is_open as u8; o += 1;
         buf[o] = self.bump;
     }

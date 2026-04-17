@@ -34,12 +34,35 @@ export const ProPanel: FC<{
   const [confirmDesc, setConfirmDesc] = useState<string | null>(null);
   const [pendingSide, setPendingSide] = useState<"Long" | "Short">("Long");
   const [optimistic, setOptimistic] = useState<{ side: string; value: number } | null>(null);
+  const [orderPrice, setOrderPrice] = useState("");
+  const [orderSize, setOrderSize] = useState("");
+  const [orderBusy, setOrderBusy] = useState(false);
+  const [crankStatus, setCrankStatus] = useState<{ batchesExecuted: number } | null>(null);
+  const [fundingHistory, setFundingHistory] = useState<{ timestamp: number; price: number; rate: number }[]>([]);
 
   // Fetch vault risk on mount
   useEffect(() => {
     fetch(`${API_BASE}/vault/risk`)
       .then(r => r.json())
       .then(setVaultRisk)
+      .catch(() => {});
+  }, []);
+
+  // Poll crank status every 5s
+  useEffect(() => {
+    const poll = () => {
+      fetch(`${API_BASE}/crank/status`).then(r => r.json()).then(setCrankStatus).catch(() => {});
+    };
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Fetch funding history on mount
+  useEffect(() => {
+    fetch(`${API_BASE}/funding/history`)
+      .then(r => r.json())
+      .then(setFundingHistory)
       .catch(() => {});
   }, []);
 
@@ -120,6 +143,43 @@ export const ProPanel: FC<{
     }
   };
 
+  const placeOrder = async (orderSide: "Long" | "Short") => {
+    if (!publicKey || !orderPrice || !orderSize) return;
+    setOrderBusy(true);
+    try {
+      const sig = await sendTx("/build-tx/place-order", {
+        wallet: publicKey.toBase58(),
+        price: BigInt(Math.floor(Number(orderPrice) * 1e6)).toString(),
+        size: BigInt(Math.floor(Number(orderSize) * 1e9)).toString(),
+        side: orderSide,
+        market,
+      });
+      setStatus(`Order placed: ${sig.slice(0, 8)}...`);
+      setOrderPrice("");
+      setOrderSize("");
+    } catch (e: any) {
+      setStatus(e.message ?? String(e));
+    } finally {
+      setOrderBusy(false);
+    }
+  };
+
+  const cancelOrder = async () => {
+    if (!publicKey) return;
+    setOrderBusy(true);
+    try {
+      const sig = await sendTx("/build-tx/cancel-order", {
+        wallet: publicKey.toBase58(),
+        market,
+      });
+      setStatus(`Order cancelled: ${sig.slice(0, 8)}...`);
+    } catch (e: any) {
+      setStatus(e.message ?? String(e));
+    } finally {
+      setOrderBusy(false);
+    }
+  };
+
   return (
     <div className="border border-slate-800 rounded-xl p-4 space-y-4">
       {/* Header + Market Selector */}
@@ -146,9 +206,21 @@ export const ProPanel: FC<{
           <div className="text-slate-500">Spread</div>
           <div className="font-mono text-slate-300">
             {vaultRisk?.suspended ? (
-              <span className="text-red-400">SUSPENDED</span>
+              <span className="text-red-400">SUSPENDED (&gt;90% skew)</span>
             ) : (
-              `${vaultRisk?.spreadBps ?? "—"} bps`
+              <>
+                {vaultRisk?.spreadBps ?? "—"} bps
+                <span className="text-slate-600 ml-1 text-[10px]">
+                  T{(() => {
+                    const s = vaultRisk?.skewPct ?? 0;
+                    if (s <= 30) return "1";
+                    if (s <= 55) return "2";
+                    if (s <= 75) return "3";
+                    if (s <= 90) return "4";
+                    return "X";
+                  })()}
+                </span>
+              </>
             )}
           </div>
         </div>
@@ -174,6 +246,85 @@ export const ProPanel: FC<{
           <span className="font-mono text-slate-400">
             Last: {new Date(batchQueue.lastBatchAt).toLocaleTimeString()}
           </span>
+        </div>
+      )}
+
+      {/* DFBA Order Book */}
+      <div className="border border-slate-800 rounded p-3 space-y-2">
+        <div className="text-xs font-semibold text-slate-400">DFBA Order Book</div>
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <div className="text-green-400 font-mono">Bids: {batchQueue?.bids ?? 0}</div>
+          <div className="text-red-400 font-mono text-right">Asks: {batchQueue?.asks ?? 0}</div>
+        </div>
+        <div className="flex gap-2">
+          <input
+            placeholder="Price"
+            type="number"
+            value={orderPrice}
+            onChange={e => setOrderPrice(e.target.value)}
+            className="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs font-mono"
+            disabled={!publicKey || orderBusy}
+          />
+          <input
+            placeholder="Size (SOL)"
+            type="number"
+            value={orderSize}
+            onChange={e => setOrderSize(e.target.value)}
+            className="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs font-mono"
+            disabled={!publicKey || orderBusy}
+          />
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => placeOrder("Long")}
+            disabled={!publicKey || orderBusy || !orderPrice || !orderSize}
+            className="flex-1 bg-green-700 hover:bg-green-600 disabled:opacity-40 rounded py-1 text-xs font-semibold"
+          >
+            Bid
+          </button>
+          <button
+            onClick={() => placeOrder("Short")}
+            disabled={!publicKey || orderBusy || !orderPrice || !orderSize}
+            className="flex-1 bg-red-700 hover:bg-red-600 disabled:opacity-40 rounded py-1 text-xs font-semibold"
+          >
+            Ask
+          </button>
+        </div>
+        <button
+          onClick={cancelOrder}
+          disabled={!publicKey || orderBusy}
+          className="w-full text-xs text-slate-500 hover:text-slate-300 disabled:opacity-40"
+        >
+          Cancel My Order
+        </button>
+      </div>
+
+      {/* Crank Status + Fee Income */}
+      <div className="grid grid-cols-2 gap-2">
+        <div className="bg-slate-900 rounded p-2 text-xs">
+          <div className="text-slate-500">Crank Batches</div>
+          <div className="font-mono text-slate-300">{crankStatus?.batchesExecuted ?? 0}</div>
+        </div>
+        <div className="bg-slate-900 rounded p-2 text-xs">
+          <div className="text-slate-500">Crank Fees</div>
+          <div className="font-mono text-green-400">
+            {((crankStatus?.batchesExecuted ?? 0) * 0.001).toFixed(3)} SOL
+          </div>
+        </div>
+      </div>
+
+      {/* Funding Rate History */}
+      {fundingHistory.length > 0 && (
+        <div className="text-xs space-y-1">
+          <div className="text-slate-500 font-semibold">Funding History (8h)</div>
+          {fundingHistory.slice(-8).map((f, i) => (
+            <div key={i} className="flex justify-between font-mono">
+              <span className="text-slate-500">{new Date(f.timestamp).toLocaleTimeString()}</span>
+              <span className={f.rate >= 0 ? "text-green-400" : "text-red-400"}>
+                {f.rate >= 0 ? "+" : ""}{f.rate.toFixed(4)}%
+              </span>
+            </div>
+          ))}
         </div>
       )}
 

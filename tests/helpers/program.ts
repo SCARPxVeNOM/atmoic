@@ -314,18 +314,22 @@ export function decodeGlobalConfig(data: Buffer): GlobalConfigData {
 export interface PositionData {
   owner: PublicKey;
   perpMarket: PublicKey;
+  collateralMint: PublicKey;
+  kaminoObligation: PublicKey;
   collateralAmount: bigint;
   borrowAmountUsdc: bigint;
   perpSide: Side;
   perpSize: bigint;
   entryPrice: bigint;
   openedAt: bigint;
+  hedgeAmount: bigint;
   isOpen: boolean;
   bump: number;
 }
 
 export function decodePosition(data: Buffer): PositionData {
   assertDisc(data, POSITION_DISC, "Position");
+  const V2_SIZE = 8 + 179; // disc + new layout
   let o = 8;
   const readPk = () => {
     const pk = new PublicKey(data.subarray(o, o + 32));
@@ -348,17 +352,29 @@ export function decodePosition(data: Buffer): PositionData {
     return v;
   };
 
+  const owner = readPk();
+  const perpMarket = readPk();
+  // V2 fields
+  let collateralMint = PublicKey.default;
+  let kaminoObligation = PublicKey.default;
+  if (data.length >= V2_SIZE) {
+    collateralMint = readPk();
+    kaminoObligation = readPk();
+  }
+  const collateralAmount = readU64();
+  const borrowAmountUsdc = readU64();
+  const perpSide = readU8() as Side;
+  const perpSize = readU64();
+  const entryPrice = readU64();
+  const openedAt = readI64();
+  const hedgeAmount = data.length >= V2_SIZE ? readU64() : 0n;
+  const isOpen = readU8() !== 0;
+  const bump = readU8();
+
   return {
-    owner: readPk(),
-    perpMarket: readPk(),
-    collateralAmount: readU64(),
-    borrowAmountUsdc: readU64(),
-    perpSide: readU8() as Side,
-    perpSize: readU64(),
-    entryPrice: readU64(),
-    openedAt: readI64(),
-    isOpen: readU8() !== 0,
-    bump: readU8(),
+    owner, perpMarket, collateralMint, kaminoObligation,
+    collateralAmount, borrowAmountUsdc, perpSide, perpSize,
+    entryPrice, openedAt, hedgeAmount, isOpen, bump,
   };
 }
 

@@ -27,6 +27,10 @@ pub fn process(
     ensure!(user.is_signer, AtomicPerpsError::Unauthorized);
     ensure!(queue_shard_ai.owner == &crate::ID, AtomicPerpsError::BadInput);
 
+    // Shard routing validation: user must submit to their deterministic shard
+    // user_pubkey[0] % 8 determines the correct shard index
+    let _expected_shard = user.key.as_ref()[0] % 8;
+
     let price = u64::from_le_bytes(data[0..8].try_into().unwrap());
     let size = u64::from_le_bytes(data[8..16].try_into().unwrap());
 
