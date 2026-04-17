@@ -30,6 +30,7 @@ import {
   extractIxForCpi,
 } from "../lib/kamino";
 import { evaluateVaultRisk } from "../lib/spread";
+import { countAccounts } from "../lib/tx-builder";
 import { getPsfStatus } from "../lib/psf";
 import { liquidatorStats } from "./liquidator";
 import { compute8hTwap, computeFundingRate } from "../lib/funding";
@@ -255,6 +256,21 @@ app.post("/build-tx/open", async (req, res) => {
       kaminoRemainingAccounts,
     });
 
+    // Account preflight check (F-01 R-4): fail if >32 unique accounts
+    const allOpenIxs = [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 800_000 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
+      ...kaminoSetupIxs, ix, ...kaminoCleanupIxs,
+    ];
+    const acctCount = countAccounts(allOpenIxs, user);
+    if (acctCount > 32) {
+      return res.status(400).json({
+        error: "account_budget_exceeded",
+        count: acctCount,
+        message: `Transaction uses ${acctCount} accounts — exceeds safe limit of 32`,
+      });
+    }
+
     const [{ blockhash, lastValidBlockHeight }, lookupTables] = await Promise.all([
       connection.getLatestBlockhash(),
       getAlt(),
@@ -263,13 +279,7 @@ app.post("/build-tx/open", async (req, res) => {
     const message = new TransactionMessage({
       payerKey: user,
       recentBlockhash: blockhash,
-      instructions: [
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 800_000 }),
-        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
-        ...kaminoSetupIxs,
-        ix,
-        ...kaminoCleanupIxs,
-      ],
+      instructions: allOpenIxs,
     }).compileToV0Message(lookupTables);
 
     const vtx = new VersionedTransaction(message);
@@ -338,6 +348,21 @@ app.post("/build-tx/close", async (req, res) => {
       kaminoRemainingAccounts,
     });
 
+    // Account preflight check (F-01 R-4)
+    const allCloseIxs = [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 800_000 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
+      ...kaminoSetupIxs, ix, ...kaminoCleanupIxs,
+    ];
+    const acctCount = countAccounts(allCloseIxs, user);
+    if (acctCount > 32) {
+      return res.status(400).json({
+        error: "account_budget_exceeded",
+        count: acctCount,
+        message: `Transaction uses ${acctCount} accounts — exceeds safe limit of 32`,
+      });
+    }
+
     const [{ blockhash, lastValidBlockHeight }, lookupTables] = await Promise.all([
       connection.getLatestBlockhash(),
       getAlt(),
@@ -346,13 +371,7 @@ app.post("/build-tx/close", async (req, res) => {
     const message = new TransactionMessage({
       payerKey: user,
       recentBlockhash: blockhash,
-      instructions: [
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 800_000 }),
-        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
-        ...kaminoSetupIxs,
-        ix,
-        ...kaminoCleanupIxs,
-      ],
+      instructions: allCloseIxs,
     }).compileToV0Message(lookupTables);
 
     const vtx = new VersionedTransaction(message);

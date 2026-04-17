@@ -31,6 +31,7 @@ export const ProPanel: FC<{
   const [vaultRisk, setVaultRisk] = useState<VaultRisk | null>(null);
   const [confirmDesc, setConfirmDesc] = useState<string | null>(null);
   const [pendingSide, setPendingSide] = useState<"Long" | "Short">("Long");
+  const [optimistic, setOptimistic] = useState<{ side: string; value: number } | null>(null);
 
   // Fetch vault risk on mount
   useState(() => {
@@ -76,6 +77,7 @@ export const ProPanel: FC<{
     setConfirmDesc(null);
     setBusy(true);
     setStatus(null);
+    setOptimistic({ side, value: Number(collateral) * solPrice * leverage });
     onConfirming?.();
     try {
       const lamports = BigInt(Math.floor(Number(collateral) * 1e9));
@@ -90,8 +92,10 @@ export const ProPanel: FC<{
         useKamino: true,
       });
       setStatus(`Opened: ${sig.slice(0, 8)}...`);
+      setOptimistic(null);
     } catch (e: any) {
       setStatus(e.message ?? String(e));
+      setOptimistic(null);
     } finally {
       setBusy(false);
       onConfirmed?.();
@@ -157,8 +161,22 @@ export const ProPanel: FC<{
         </div>
       )}
 
-      {/* Position View */}
-      {position?.isOpen ? (
+      {/* Optimistic confirmation banner */}
+      {optimistic && !position?.isOpen ? (
+        <div className="border border-indigo-500/50 rounded-lg p-4 animate-pulse">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-2 h-2 rounded-full bg-indigo-400 animate-ping" />
+            <span className="text-sm text-indigo-300">Confirming on Solana...</span>
+          </div>
+          <div className="text-lg font-mono">
+            {optimistic.side} ${optimistic.value.toFixed(2)}
+          </div>
+          <div className="text-xs text-slate-500 mt-1">
+            Transaction sent — waiting for block confirmation
+          </div>
+        </div>
+      ) : /* Position View */
+      position?.isOpen ? (
         <div className="space-y-2">
           <dl className="grid grid-cols-2 gap-1.5 text-xs">
             <dt className="text-slate-500">Side</dt>

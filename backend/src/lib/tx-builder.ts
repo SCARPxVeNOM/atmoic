@@ -39,7 +39,7 @@ async function getAlt(): Promise<AddressLookupTableAccount | null> {
 /**
  * Count unique accounts across all instructions.
  */
-function countAccounts(ixs: TransactionInstruction[], feePayer: PublicKey): number {
+export function countAccounts(ixs: TransactionInstruction[], feePayer: PublicKey): number {
   const keys = new Set<string>();
   keys.add(feePayer.toBase58());
   for (const ix of ixs) {
