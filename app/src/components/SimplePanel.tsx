@@ -16,6 +16,7 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ side: "Long" | "Short"; desc: string } | null>(null);
+  const [optimistic, setOptimistic] = useState<{ side: string; value: number } | null>(null);
 
   const estValue = Number(amount) * solPrice * leverage;
 
@@ -55,6 +56,7 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
     setConfirm(null);
     setBusy(true);
     setStatus(null);
+    setOptimistic({ side, value: Number(amount) * solPrice * leverage });
     try {
       const lamports = BigInt(Math.floor(Number(amount) * 1e9));
       const borrow = BigInt(Math.floor(Number(amount) * solPrice * (leverage - 1) * 1e6));
@@ -68,8 +70,10 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
         useKamino: true,
       });
       setStatus("Position opened");
+      setOptimistic(null);
     } catch (e: any) {
       setStatus(e.message ?? String(e));
+      setOptimistic(null);
     } finally {
       setBusy(false);
     }
@@ -88,6 +92,25 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
       setBusy(false);
     }
   };
+
+  // Optimistic confirmation banner
+  if (optimistic && !position?.isOpen) {
+    return (
+      <div className="border border-indigo-500/50 rounded-xl p-5 animate-pulse">
+        <div className="flex items-center gap-2 mb-2">
+          <div className="w-2 h-2 rounded-full bg-indigo-400 animate-ping" />
+          <span className="text-sm text-indigo-300">Confirming on Solana...</span>
+        </div>
+        <div className="text-2xl font-mono font-bold">
+          ${optimistic.value.toFixed(2)}
+          <span className="text-sm text-slate-500 ml-2">{optimistic.side} SOL</span>
+        </div>
+        <div className="text-xs text-slate-500 mt-1">
+          Transaction sent — waiting for block confirmation
+        </div>
+      </div>
+    );
+  }
 
   // Open position view
   if (position?.isOpen) {

@@ -140,6 +140,17 @@ pub fn process(
     ensure!(new_total_borrowed <= config.total_usdc_reserve, AtomicPerpsError::InsufficientCollateral);
     ensure!(new_total_borrowed <= config.max_tvl, AtomicPerpsError::TVLCapExceeded);
 
+    // -------- 3b. OI hard cap: total OI must not exceed 80% of reserve (F-03 R-2) --------
+    let preview_size = calculate_position_size(params.borrow_amount, params.leverage_bps)?;
+    let new_total_oi = match params.perp_side {
+        Side::Long => config.total_long_oi.saturating_add(preview_size)
+            .saturating_add(config.total_short_oi),
+        Side::Short => config.total_long_oi
+            .saturating_add(config.total_short_oi.saturating_add(preview_size)),
+    };
+    let oi_cap = config.total_usdc_reserve * 80 / 100;
+    ensure!(new_total_oi <= oi_cap, AtomicPerpsError::TVLCapExceeded);
+
     // -------- 4. Collateral: user -> sol_vault --------
     spl_transfer(token_program, user_sol_account, sol_vault, user, params.collateral_amount)?;
 

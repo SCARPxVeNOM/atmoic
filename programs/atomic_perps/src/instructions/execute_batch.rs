@@ -81,5 +81,14 @@ pub fn process(
         save_config(global_config_ai, &config)?;
     }
 
+    // Crank fee: pay 0.001 SOL to crank caller from config PDA excess lamports (A-03 R-1)
+    let crank_fee_lamports: u64 = 1_000_000; // 0.001 SOL
+    let min_rent: u64 = 890_880; // approximate rent-exempt minimum for config account
+    let config_lamports = global_config_ai.lamports();
+    if config_lamports > crank_fee_lamports + min_rent {
+        **global_config_ai.try_borrow_mut_lamports()? -= crank_fee_lamports;
+        **crank.try_borrow_mut_lamports()? += crank_fee_lamports;
+    }
+
     Ok(())
 }
