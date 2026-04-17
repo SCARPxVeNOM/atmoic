@@ -64,7 +64,8 @@ pub fn process(
     let mut position = load_position(position_ai)?;
 
     ensure!(position.is_open, AtomicPerpsError::PositionNotOpen);
-    ensure!(*pyth_price_feed.key == config.pyth_sol_feed, AtomicPerpsError::InvalidOracleFeed);
+    ensure!(crate::constants::is_allowed_feed(pyth_price_feed.key), AtomicPerpsError::InvalidOracleFeed);
+    ensure!(*pyth_price_feed.key == position.perp_market, AtomicPerpsError::InvalidOracleFeed);
     ensure!(*sol_vault.key == config.sol_vault, AtomicPerpsError::BadInput);
 
     // Verify position PDA

@@ -28,9 +28,7 @@ const DISC_MIGRATE_CFG: [u8; 8] = [0x5c, 0x83, 0x3a, 0x69, 0xd2, 0x9a, 0xe0, 0xc
 #[cfg(feature = "dfba")]
 const DISC_EXEC_BATCH:  [u8; 8] = [0x70, 0x9f, 0xd3, 0x33, 0xee, 0x46, 0xd4, 0x3c];
 #[cfg(feature = "dfba")]
-const DISC_PLACE_COMMIT:[u8; 8] = [0x14, 0x3e, 0x08, 0x7e, 0x21, 0xc8, 0x81, 0x90];
-#[cfg(feature = "dfba")]
-const DISC_REVEAL_ORDER:[u8; 8] = [0x19, 0xf4, 0x2a, 0xdb, 0x11, 0x9c, 0xd3, 0x4a];
+const DISC_PLACE_ORDER: [u8; 8] = [0x14, 0x3e, 0x08, 0x7e, 0x21, 0xc8, 0x81, 0x90];
 #[cfg(feature = "dfba")]
 const DISC_CANCEL_ORDER:[u8; 8] = [0x5f, 0x81, 0xed, 0xf0, 0x08, 0x31, 0xdf, 0x84];
 
@@ -55,9 +53,7 @@ pub fn process_instruction(
         #[cfg(feature = "dfba")]
         DISC_EXEC_BATCH   => instructions::execute_batch::process(program_id, accounts, data),
         #[cfg(feature = "dfba")]
-        DISC_PLACE_COMMIT => instructions::place_commitment::process(program_id, accounts, data),
-        #[cfg(feature = "dfba")]
-        DISC_REVEAL_ORDER => instructions::reveal_order::process(program_id, accounts, data),
+        DISC_PLACE_ORDER  => instructions::place_order::process(program_id, accounts, data),
         #[cfg(feature = "dfba")]
         DISC_CANCEL_ORDER => instructions::cancel_order::process(program_id, accounts, data),
         _ => Err(ProgramError::InvalidInstructionData),

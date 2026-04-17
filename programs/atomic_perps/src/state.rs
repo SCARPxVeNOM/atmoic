@@ -117,6 +117,7 @@ impl GlobalConfig {
 #[derive(Clone)]
 pub struct Position {
     pub owner: Pubkey,
+    pub perp_market: Pubkey,
     pub collateral_amount: u64,
     pub borrow_amount_usdc: u64,
     pub perp_side: Side,
@@ -128,12 +129,13 @@ pub struct Position {
 }
 
 impl Position {
-    pub const INIT_SPACE: usize = 75; // 32 + 8+8+1+8+8+8+1+1
+    pub const INIT_SPACE: usize = 107; // 32+32 + 8+8+1+8+8+8+1+1
 
     pub fn deserialize(data: &[u8]) -> Option<Self> {
         if data.len() < Self::INIT_SPACE { return None; }
         let mut o = 0;
         let owner = Pubkey::new_from_array(data[o..o+32].try_into().unwrap()); o += 32;
+        let perp_market = Pubkey::new_from_array(data[o..o+32].try_into().unwrap()); o += 32;
         let collateral_amount = u64::from_le_bytes(data[o..o+8].try_into().unwrap()); o += 8;
         let borrow_amount_usdc = u64::from_le_bytes(data[o..o+8].try_into().unwrap()); o += 8;
         let perp_side = Side::from_u8(data[o])?; o += 1;
@@ -142,12 +144,13 @@ impl Position {
         let opened_at = i64::from_le_bytes(data[o..o+8].try_into().unwrap()); o += 8;
         let is_open = data[o] != 0; o += 1;
         let bump = data[o];
-        Some(Self { owner, collateral_amount, borrow_amount_usdc, perp_side, perp_size, entry_price, opened_at, is_open, bump })
+        Some(Self { owner, perp_market, collateral_amount, borrow_amount_usdc, perp_side, perp_size, entry_price, opened_at, is_open, bump })
     }
 
     pub fn serialize_into(&self, buf: &mut [u8]) {
         let mut o = 0;
         buf[o..o+32].copy_from_slice(self.owner.as_ref()); o += 32;
+        buf[o..o+32].copy_from_slice(self.perp_market.as_ref()); o += 32;
         buf[o..o+8].copy_from_slice(&self.collateral_amount.to_le_bytes()); o += 8;
         buf[o..o+8].copy_from_slice(&self.borrow_amount_usdc.to_le_bytes()); o += 8;
         buf[o] = self.perp_side as u8; o += 1;

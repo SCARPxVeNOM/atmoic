@@ -12,8 +12,8 @@ export interface MarketInfo {
 export function useMarkets() {
   const [markets, setMarkets] = useState<MarketInfo[]>([
     { symbol: "SOL-PERP", name: "Solana", maxLeverage: 10000, enabled: true, category: "major" },
-    { symbol: "BTC-PERP", name: "Bitcoin", maxLeverage: 20000, enabled: false, category: "major" },
-    { symbol: "ETH-PERP", name: "Ethereum", maxLeverage: 20000, enabled: false, category: "major" },
+    { symbol: "BTC-PERP", name: "Bitcoin", maxLeverage: 20000, enabled: true, category: "major" },
+    { symbol: "ETH-PERP", name: "Ethereum", maxLeverage: 20000, enabled: true, category: "major" },
   ]);
 
   useEffect(() => {

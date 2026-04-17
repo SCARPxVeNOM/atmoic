@@ -20,8 +20,8 @@ use crate::utils::account::{create_pda_account, load_config, save_config, save_p
 use crate::events::emit_position_opened;
 #[cfg(feature = "kamino-cpi")]
 use crate::utils::cpi::kamino::cpi_borrow;
-#[cfg(not(feature = "kamino-cpi"))]
 use crate::utils::cpi::jupiter::cpi_swap;
+use crate::constants::is_allowed_feed;
 
 pub struct AtomicOpenParams {
     pub collateral_amount: u64,
@@ -112,7 +112,7 @@ pub fn process(
     ensure!(params.leverage_bps <= config.max_leverage, AtomicPerpsError::ExcessiveLeverage);
     ensure!(params.hedge_amount <= params.borrow_amount, AtomicPerpsError::InsufficientCollateral);
 
-    ensure!(*pyth_price_feed.key == config.pyth_sol_feed, AtomicPerpsError::InvalidOracleFeed);
+    ensure!(is_allowed_feed(pyth_price_feed.key), AtomicPerpsError::InvalidOracleFeed);
     ensure!(*sol_vault.key == config.sol_vault, AtomicPerpsError::BadInput);
     ensure!(*usdc_reserve.key == config.usdc_reserve, AtomicPerpsError::BadInput);
 
@@ -169,23 +169,22 @@ pub fn process(
     }
 
     // -------- 6. Optional Kamino CPI --------
+    let mut kamino_acct_count: usize = 0;
     #[cfg(feature = "kamino-cpi")]
-    {
-        ensure!(params.hedge_amount == 0, AtomicPerpsError::BadInput);
-        if !params.kamino_borrow_data.is_empty() {
-            ensure!(remaining_accounts.len() >= 2, AtomicPerpsError::BadInput);
-            let kamino_program = &remaining_accounts[0];
-            let borrow_accounts = &remaining_accounts[1..];
-            cpi_borrow(kamino_program, borrow_accounts, &params.kamino_borrow_data)?;
-        }
+    if !params.kamino_borrow_data.is_empty() {
+        ensure!(remaining_accounts.len() >= 2, AtomicPerpsError::BadInput);
+        let kamino_program = &remaining_accounts[0];
+        let borrow_accounts = &remaining_accounts[1..];
+        kamino_acct_count = 1 + borrow_accounts.len();
+        cpi_borrow(kamino_program, borrow_accounts, &params.kamino_borrow_data)?;
     }
 
-    // -------- 7. Optional Jupiter hedge --------
-    #[cfg(not(feature = "kamino-cpi"))]
+    // -------- 7. Optional Jupiter hedge (runs AFTER kamino, not exclusive) --------
     if params.hedge_amount > 0 && !params.jupiter_swap_data.is_empty() {
-        ensure!(remaining_accounts.len() >= 2, AtomicPerpsError::BadInput);
-        let jupiter_program = &remaining_accounts[0];
-        let swap_accounts = &remaining_accounts[1..];
+        let jupiter_accounts = &remaining_accounts[kamino_acct_count..];
+        ensure!(jupiter_accounts.len() >= 2, AtomicPerpsError::BadInput);
+        let jupiter_program = &jupiter_accounts[0];
+        let swap_accounts = &jupiter_accounts[1..];
         cpi_swap(jupiter_program, swap_accounts, &params.jupiter_swap_data)?;
     }
 
@@ -206,6 +205,7 @@ pub fn process(
 
     let position = Position {
         owner: user_key,
+        perp_market: *pyth_price_feed.key,
         collateral_amount: params.collateral_amount,
         borrow_amount_usdc: params.borrow_amount,
         perp_side: params.perp_side,

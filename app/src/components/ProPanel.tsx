@@ -26,6 +26,8 @@ export const ProPanel: FC<{
   const [collateral, setCollateral] = useState("0.1");
   const [leverage, setLeverage] = useState(5);
   const [side, setSide] = useState<"Long" | "Short">("Long");
+  const [market, setMarket] = useState("SOL-PERP");
+  const [hedgePct, setHedgePct] = useState(0);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [vaultRisk, setVaultRisk] = useState<VaultRisk | null>(null);
@@ -82,14 +84,16 @@ export const ProPanel: FC<{
     try {
       const lamports = BigInt(Math.floor(Number(collateral) * 1e9));
       const borrow = BigInt(Math.floor(Number(collateral) * solPrice * (leverage - 1) * 1e6));
+      const hedgeAmount = BigInt(Math.floor(Number(borrow) * hedgePct / 100));
       const sig = await sendTx("/build-tx/open", {
         wallet: publicKey.toBase58(),
         collateralAmount: lamports.toString(),
         borrowAmount: borrow.toString(),
         side,
         leverageBps: leverage * 1000,
-        hedgeAmount: "0",
+        hedgeAmount: hedgeAmount.toString(),
         useKamino: true,
+        market,
       });
       setStatus(`Opened: ${sig.slice(0, 8)}...`);
       setOptimistic(null);
@@ -118,10 +122,22 @@ export const ProPanel: FC<{
 
   return (
     <div className="border border-slate-800 rounded-xl p-4 space-y-4">
-      {/* Header */}
+      {/* Header + Market Selector */}
       <div className="flex items-center justify-between">
         <span className="text-sm font-semibold">Pro Trading</span>
-        <span className="text-xs text-slate-500">SOL-PERP</span>
+        <div className="flex gap-1">
+          {["SOL-PERP", "BTC-PERP", "ETH-PERP"].map(m => (
+            <button
+              key={m}
+              onClick={() => setMarket(m)}
+              className={`px-2 py-0.5 text-xs rounded font-mono ${
+                market === m ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"
+              }`}
+            >
+              {m.split("-")[0]}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Vault & Funding Info */}
@@ -229,6 +245,25 @@ export const ProPanel: FC<{
           <div className="flex items-center justify-between text-xs text-slate-500">
             <span>Notional: <span className="text-slate-300 font-mono">${notional.toFixed(2)}</span></span>
             <span>Clearing: <span className="text-slate-300 font-mono">${solPrice.toFixed(2)}</span> (Pyth)</span>
+          </div>
+
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">
+              Jupiter Hedge: <span className="font-mono text-slate-300">{hedgePct}%</span>
+            </label>
+            <input
+              type="range"
+              min={0}
+              max={50}
+              step={5}
+              value={hedgePct}
+              onChange={e => setHedgePct(Number(e.target.value))}
+              className="w-full"
+              disabled={!publicKey}
+            />
+            <div className="flex justify-between text-xs text-slate-600 mt-0.5">
+              <span>No hedge</span><span>50%</span>
+            </div>
           </div>
 
           {confirmDesc ? (

@@ -8,6 +8,7 @@ use solana_program::{
 };
 use crate::errors::AtomicPerpsError;
 use crate::constants::*;
+use crate::constants::is_allowed_feed;
 use crate::ensure;
 use crate::utils::oracle::validate_and_get_price;
 use crate::utils::math::{apply_fee, calculate_pnl, checked_mul_div};
@@ -72,7 +73,8 @@ pub fn process(
 
     ensure!(position.is_open, AtomicPerpsError::PositionNotOpen);
     ensure!(position.owner == *user.key, AtomicPerpsError::Unauthorized);
-    ensure!(*pyth_price_feed.key == config.pyth_sol_feed, AtomicPerpsError::InvalidOracleFeed);
+    ensure!(is_allowed_feed(pyth_price_feed.key), AtomicPerpsError::InvalidOracleFeed);
+    ensure!(*pyth_price_feed.key == position.perp_market, AtomicPerpsError::InvalidOracleFeed);
     ensure!(*usdc_reserve.key == config.usdc_reserve, AtomicPerpsError::BadInput);
     ensure!(*sol_vault.key == config.sol_vault, AtomicPerpsError::BadInput);
 

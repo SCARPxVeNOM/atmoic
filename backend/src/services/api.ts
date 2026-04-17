@@ -31,6 +31,7 @@ import {
 } from "../lib/kamino";
 import { evaluateVaultRisk } from "../lib/spread";
 import { countAccounts } from "../lib/tx-builder";
+import { getMarket } from "../lib/market-registry";
 import { getPsfStatus } from "../lib/psf";
 import { liquidatorStats } from "./liquidator";
 import { compute8hTwap, computeFundingRate } from "../lib/funding";
@@ -172,10 +173,19 @@ app.post("/build-tx/open", async (req, res) => {
       leverageBps,
       hedgeAmount = "0",
       useKamino = false,
+      market = "SOL-PERP",
     } = req.body ?? {};
     if (!wallet || !collateralAmount || !borrowAmount || !side || !leverageBps) {
       return res.status(400).json({ error: "missing required field" });
     }
+
+    // Look up market for oracle feed selection
+    const marketInfo = getMarket(market);
+    if (!marketInfo || !marketInfo.enabled) {
+      return res.status(400).json({ error: `Market ${market} not found or disabled` });
+    }
+    const marketFeed = new PublicKey(marketInfo.pythFeedPubkey);
+
     const user = new PublicKey(wallet);
     const config = await loadConfig();
 
@@ -244,7 +254,7 @@ app.post("/build-tx/open", async (req, res) => {
       solVault: config.solVault,
       usdcReserve: config.usdcReserve,
       feeRecipientAccount,
-      pythPriceFeed: config.pythSolFeed,
+      pythPriceFeed: marketFeed,
       collateralAmount: BigInt(collateralAmount),
       borrowAmount: rawBorrow,
       perpSide: side === "Short" ? Side.Short : Side.Long,

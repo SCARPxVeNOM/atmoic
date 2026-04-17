@@ -5,6 +5,12 @@ import { PositionView } from "../hooks/usePosition";
 import { API_BASE } from "../config";
 import { describeTransaction } from "../lib/tx-description";
 
+const MARKETS = [
+  { symbol: "SOL-PERP", label: "SOL" },
+  { symbol: "BTC-PERP", label: "BTC" },
+  { symbol: "ETH-PERP", label: "ETH" },
+];
+
 export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }> = ({
   position,
   solPrice,
@@ -13,6 +19,7 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
   const { connection } = useConnection();
   const [amount, setAmount] = useState("0.1");
   const [leverage, setLeverage] = useState(2);
+  const [market, setMarket] = useState("SOL-PERP");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ side: "Long" | "Short"; desc: string } | null>(null);
@@ -68,6 +75,7 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
         leverageBps: leverage * 1000,
         hedgeAmount: "0",
         useKamino: true,
+        market,
       });
       setStatus("Position opened");
       setOptimistic(null);
@@ -149,7 +157,24 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
 
   return (
     <div className="border border-slate-800 rounded-xl p-5 space-y-4">
-      <div className="text-sm text-slate-400">Start Trading</div>
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-slate-400">Start Trading</span>
+        <div className="flex gap-1">
+          {MARKETS.map(m => (
+            <button
+              key={m.symbol}
+              onClick={() => setMarket(m.symbol)}
+              className={`px-2.5 py-1 text-xs rounded-md font-medium ${
+                market === m.symbol
+                  ? "bg-indigo-600 text-white"
+                  : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <div>
         <label className="block text-xs text-slate-500 mb-1">Amount (SOL)</label>

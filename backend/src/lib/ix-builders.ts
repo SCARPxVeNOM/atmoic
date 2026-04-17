@@ -275,57 +275,24 @@ export function buildExecuteBatchIx(args: {
   });
 }
 
-// ----- place_commitment (DFBA) -----
+// ----- place_order (DFBA) -----
 
-export function buildPlaceCommitmentIx(args: {
-  user: PublicKey;
-  hash: Buffer;
-  side: number;
-  notionalEstimate: bigint;
-}): TransactionInstruction {
-  const [commitment] = findCommitmentPda(args.user);
-
-  const data = Buffer.concat([
-    discriminator("place_commitment"),
-    args.hash.subarray(0, 32),
-    writeU8(args.side),
-    writeU64LE(args.notionalEstimate),
-  ]);
-
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: args.user, isSigner: true, isWritable: true },
-      { pubkey: commitment, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    data,
-  });
-}
-
-// ----- reveal_order (DFBA) -----
-
-export function buildRevealOrderIx(args: {
+export function buildPlaceOrderIx(args: {
   user: PublicKey;
   queueShard: PublicKey;
   price: bigint;
   size: bigint;
-  nonce: Buffer;
 }): TransactionInstruction {
-  const [commitment] = findCommitmentPda(args.user);
-
   const data = Buffer.concat([
-    discriminator("reveal_order"),
+    discriminator("place_commitment"), // reuses same discriminator slot
     writeU64LE(args.price),
     writeU64LE(args.size),
-    args.nonce.subarray(0, 32),
   ]);
 
   return new TransactionInstruction({
     programId,
     keys: [
       { pubkey: args.user, isSigner: true, isWritable: true },
-      { pubkey: commitment, isSigner: false, isWritable: true },
       { pubkey: args.queueShard, isSigner: false, isWritable: true },
     ],
     data,

@@ -11,7 +11,7 @@ pub const JUPITER_PROGRAM_ID: Pubkey =
 pub const SPL_TOKEN_PROGRAM_ID: Pubkey =
     solana_program::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 
-// === Pyth Price Feed IDs (mainnet) ===
+// === Pyth Price Feed IDs (mainnet hex) ===
 
 pub const PYTH_SOL_USD_FEED_ID: [u8; 32] = [
     0xef, 0x0d, 0x8b, 0x6f, 0xda, 0x2c, 0xeb, 0xa4,
@@ -19,6 +19,23 @@ pub const PYTH_SOL_USD_FEED_ID: [u8; 32] = [
     0x2a, 0x0d, 0x2f, 0x8e, 0xd0, 0xc6, 0xc7, 0xbc,
     0x0f, 0x4c, 0xfa, 0xc8, 0xc2, 0x80, 0xb5, 0x6d,
 ];
+
+// === Pyth On-Chain Feed Account Addresses (mainnet) ===
+// These are the account Pubkeys passed to instructions, not the hex feed IDs.
+
+pub const PYTH_SOL_FEED: Pubkey =
+    solana_program::pubkey!("7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE");
+
+pub const PYTH_BTC_FEED: Pubkey =
+    solana_program::pubkey!("4cSM2e6rvbGQUFiJbqytoVMi5GgghSMr8LwVrT9VPSPo");
+
+pub const PYTH_ETH_FEED: Pubkey =
+    solana_program::pubkey!("42amVS4KgzR9rA28tkVYqVXjq9Qa8dcZQMbH5EYFX6XC");
+
+/// Check if a Pyth price feed account is in the allowed whitelist.
+pub fn is_allowed_feed(feed: &Pubkey) -> bool {
+    *feed == PYTH_SOL_FEED || *feed == PYTH_BTC_FEED || *feed == PYTH_ETH_FEED
+}
 
 // === Oracle Thresholds ===
 

@@ -9,6 +9,7 @@ export interface Market {
   symbol: string;
   name: string;
   pythFeedId: string;
+  pythFeedPubkey: string;  // On-chain Pyth account address (base58)
   maxLeverage: number;     // BPS (10000 = 10x)
   minNotional: number;     // USD minimum order size
   enabled: boolean;
@@ -20,6 +21,7 @@ const DEFAULT_MARKETS: Market[] = [
     symbol: "SOL-PERP",
     name: "Solana",
     pythFeedId: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d",
+    pythFeedPubkey: "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE",
     maxLeverage: 10_000,
     minNotional: 10,
     enabled: true,
@@ -29,24 +31,27 @@ const DEFAULT_MARKETS: Market[] = [
     symbol: "BTC-PERP",
     name: "Bitcoin",
     pythFeedId: "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
+    pythFeedPubkey: "4cSM2e6rvbGQUFiJbqytoVMi5GgghSMr8LwVrT9VPSPo",
     maxLeverage: 20_000,
     minNotional: 10,
-    enabled: false,
+    enabled: true,
     category: "major",
   },
   {
     symbol: "ETH-PERP",
     name: "Ethereum",
     pythFeedId: "ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace",
+    pythFeedPubkey: "42amVS4KgzR9rA28tkVYqVXjq9Qa8dcZQMbH5EYFX6XC",
     maxLeverage: 20_000,
     minNotional: 10,
-    enabled: false,
+    enabled: true,
     category: "major",
   },
   {
     symbol: "BONK-PERP",
     name: "Bonk",
     pythFeedId: "72b021217ca3fe68922a19aaf990109cb9d84e9ad004b4d2025ad6f529314419",
+    pythFeedPubkey: "",
     maxLeverage: 5_000,
     minNotional: 50,
     enabled: false,

@@ -26,6 +26,7 @@ export interface GlobalConfigData {
 
 export interface PositionData {
   owner: PublicKey;
+  perpMarket: PublicKey;
   collateralAmount: bigint;
   borrowAmountUsdc: bigint;
   perpSide: Side;
@@ -89,6 +90,7 @@ export function decodePosition(data: Buffer): PositionData {
   const r = new Reader(data);
   return {
     owner: r.pk(),
+    perpMarket: r.pk(),
     collateralAmount: r.u64(),
     borrowAmountUsdc: r.u64(),
     perpSide: r.u8() as Side,

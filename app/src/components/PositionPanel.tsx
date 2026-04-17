@@ -16,6 +16,7 @@ export const PositionPanel: FC<{
   const [collateral, setCollateral] = useState("0.1");
   const [leverage, setLeverage] = useState(3);
   const [side, setSide] = useState<"Long" | "Short">("Long");
+  const [market, setMarket] = useState("SOL-PERP");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [optimistic, setOptimistic] = useState<{ side: string; value: number } | null>(null);
@@ -72,6 +73,7 @@ export const PositionPanel: FC<{
         leverageBps: leverage * 1000,
         hedgeAmount: "0",
         useKamino: true,
+        market,
       });
       setStatus(`Opened: ${sig.slice(0, 8)}…`);
       setOptimistic(null);
@@ -156,7 +158,22 @@ export const PositionPanel: FC<{
 
   return (
     <div className="border border-slate-800 rounded-xl p-4 space-y-3">
-      <div className="text-sm text-slate-400">Open position</div>
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-slate-400">Open position</span>
+        <div className="flex gap-1">
+          {["SOL-PERP", "BTC-PERP", "ETH-PERP"].map(m => (
+            <button
+              key={m}
+              onClick={() => setMarket(m)}
+              className={`px-2 py-0.5 text-xs rounded ${
+                market === m ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"
+              }`}
+            >
+              {m.split("-")[0]}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <label className="block text-xs text-slate-500">Collateral (SOL)</label>
       <input
