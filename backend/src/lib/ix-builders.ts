@@ -148,8 +148,10 @@ export function buildAtomicOpenIx(args: AtomicOpenArgs): TransactionInstruction 
     { pubkey: programAuthority, isSigner: false, isWritable: false },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    // Kamino takes priority over Jupiter when the kamino-cpi feature is on.
-    ...(args.kaminoRemainingAccounts ?? args.jupiterRemainingAccounts ?? []),
+    // Kamino accounts first, then Jupiter accounts — on-chain indexes into
+    // remaining_accounts[kamino_acct_count..] to find Jupiter.
+    ...(args.kaminoRemainingAccounts ?? []),
+    ...(args.jupiterRemainingAccounts ?? []),
   ];
 
   return new TransactionInstruction({ programId, keys, data });

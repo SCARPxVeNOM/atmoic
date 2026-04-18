@@ -53,6 +53,32 @@ pub fn emit_position_liquidated(
     sol_log_data(&[&buf]);
 }
 
+pub fn emit_batch_cleared(
+    clearing_price: u64, pyth_price: u64,
+    total_volume: u64, num_fills: u16,
+) {
+    let mut buf = [0u8; 34];
+    buf[0..8].copy_from_slice(b"BATCHCLR");
+    buf[8..16].copy_from_slice(&clearing_price.to_le_bytes());
+    buf[16..24].copy_from_slice(&pyth_price.to_le_bytes());
+    buf[24..32].copy_from_slice(&total_volume.to_le_bytes());
+    buf[32..34].copy_from_slice(&num_fills.to_le_bytes());
+    sol_log_data(&[&buf]);
+}
+
+pub fn emit_dfba_fill(
+    user: &Pubkey, side: u8,
+    clearing_price: u64, fill_size: u64,
+) {
+    let mut buf = [0u8; 57];
+    buf[0..8].copy_from_slice(b"DFBAFILL");
+    buf[8..40].copy_from_slice(user.as_ref());
+    buf[40] = side;
+    buf[41..49].copy_from_slice(&clearing_price.to_le_bytes());
+    buf[49..57].copy_from_slice(&fill_size.to_le_bytes());
+    sol_log_data(&[&buf]);
+}
+
 pub fn emit_psf_low(psf_balance: u64, threshold: u64) {
     let mut buf = [0u8; 24];
     buf[0..8].copy_from_slice(b"PSFLOW__");

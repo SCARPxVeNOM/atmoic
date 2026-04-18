@@ -33,8 +33,14 @@ pub const PYTH_ETH_FEED: Pubkey =
     solana_program::pubkey!("42amVS4KgzR9rA28tkVYqVXjq9Qa8dcZQMbH5EYFX6XC");
 
 /// Check if a Pyth price feed account is in the allowed whitelist.
+#[cfg(not(feature = "mock-oracle"))]
 pub fn is_allowed_feed(feed: &Pubkey) -> bool {
     *feed == PYTH_SOL_FEED || *feed == PYTH_BTC_FEED || *feed == PYTH_ETH_FEED
+}
+
+#[cfg(feature = "mock-oracle")]
+pub fn is_allowed_feed(_feed: &Pubkey) -> bool {
+    true
 }
 
 // === Oracle Thresholds ===

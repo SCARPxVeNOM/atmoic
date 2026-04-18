@@ -21,9 +21,20 @@ const FEED_ID_OFFSET_FULL: usize = DISCRIMINATOR + WRITE_AUTHORITY + 1;
 
 #[cfg(feature = "mock-oracle")]
 pub fn validate_and_get_price(
-    _pyth_feed_account: &AccountInfo,
+    pyth_feed_account: &AccountInfo,
     _clock: &Clock,
 ) -> Result<(u64, u64), ProgramError> {
+    // Variable mock: if account has >=16 bytes of data, read price + conf from it.
+    // This lets tests write a custom price to an account and pass it as oracle.
+    let data = pyth_feed_account.try_borrow_data()?;
+    if data.len() >= 16 {
+        let price = u64::from_le_bytes(data[0..8].try_into().unwrap());
+        let conf = u64::from_le_bytes(data[8..16].try_into().unwrap());
+        if price > 0 {
+            return Ok((price, conf));
+        }
+    }
+    // Fallback: constant $150 SOL/USD
     Ok((150_000_000, 10_000))
 }
 

@@ -10,5 +10,7 @@ pub mod execute_batch;
 pub mod place_order;
 #[cfg(feature = "dfba")]
 pub mod cancel_order;
+#[cfg(feature = "dfba")]
+pub mod init_queue_shard;
 // Commit-reveal (place_commitment + reveal_order) deferred to Phase 2 per M-3.
 // Direct place_order used for hackathon MVP.

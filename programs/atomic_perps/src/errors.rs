@@ -24,6 +24,7 @@ pub enum AtomicPerpsError {
     CommitmentAlreadyRevealed = 6018,
     HashMismatch = 6019,
     OrderNotFound = 6020,
+    NoBidsOrAsks = 6021,
 }
 
 impl From<AtomicPerpsError> for ProgramError {

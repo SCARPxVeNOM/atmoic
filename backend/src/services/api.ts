@@ -32,6 +32,7 @@ import {
   buildKaminoRepay,
   extractIxForCpi,
 } from "../lib/kamino";
+import { buildJupiterSwap } from "../lib/jupiter";
 import { evaluateVaultRisk } from "../lib/spread";
 import { countAccounts } from "../lib/tx-builder";
 import { getMarket } from "../lib/market-registry";
@@ -250,6 +251,23 @@ app.post("/build-tx/open", async (req, res) => {
       kaminoCleanupIxs = kamino.cleanupIxs;
     }
 
+    // Build Jupiter swap when hedge is requested
+    let jupiterSwapData: Buffer = Buffer.alloc(0);
+    let jupiterRemainingAccounts: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[] = [];
+
+    if (BigInt(hedgeAmount) > 0n) {
+      try {
+        const jupSwap = await buildJupiterSwap(
+          user, config.usdcMint, config.solMint,
+          BigInt(hedgeAmount), 50,
+        );
+        jupiterSwapData = jupSwap.swapIxData;
+        jupiterRemainingAccounts = jupSwap.remainingAccounts;
+      } catch (e: any) {
+        log.warn({ err: e.message }, "Jupiter swap build failed — proceeding without hedge");
+      }
+    }
+
     const ix = buildAtomicOpenIx({
       user,
       userSolAccount,
@@ -264,7 +282,8 @@ app.post("/build-tx/open", async (req, res) => {
       leverageBps: Number(leverageBps),
       hedgeAmount: BigInt(hedgeAmount),
       spreadFeeBps: risk.spreadBps,
-      jupiterSwapData: Buffer.alloc(0),
+      jupiterSwapData,
+      jupiterRemainingAccounts,
       kaminoBorrowData,
       kaminoRemainingAccounts,
     });

@@ -169,7 +169,8 @@ export function buildAtomicOpenIx(args: AtomicOpenArgs): TransactionInstruction 
     { pubkey: programAuthority, isSigner: false, isWritable: false },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ...(args.kaminoRemainingAccounts ?? args.jupiterRemainingAccounts ?? []),
+    ...(args.kaminoRemainingAccounts ?? []),
+    ...(args.jupiterRemainingAccounts ?? []),
   ];
 
   return new TransactionInstruction({ programId: ATOMIC_PERPS_PROGRAM_ID, keys, data });
@@ -381,34 +382,31 @@ export function decodePosition(data: Buffer): PositionData {
 // ===== DFBA instruction builders =====
 
 const COMMITMENT_SEED = Buffer.from("commitment");
-const QUEUE_SEED_BUF = Buffer.from("queue");
 
 export function findCommitmentPda(user: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([COMMITMENT_SEED, user.toBuffer()], ATOMIC_PERPS_PROGRAM_ID);
 }
 
-export function findQueueShardPda(market: number, side: number, shard: number): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [QUEUE_SEED_BUF, Buffer.from([market, side, shard])],
-    ATOMIC_PERPS_PROGRAM_ID,
-  );
-}
-
 export function buildExecuteBatchIx(args: {
   cranker: PublicKey;
   pythPriceFeed: PublicKey;
-  queueShards: PublicKey[];
+  bidShards: PublicKey[];
+  askShards: PublicKey[];
 }): TransactionInstruction {
   const [config] = findConfigPda();
+  const allShards = [...args.bidShards, ...args.askShards];
   return new TransactionInstruction({
     programId: ATOMIC_PERPS_PROGRAM_ID,
     keys: [
       { pubkey: args.cranker, isSigner: true, isWritable: true },
       { pubkey: config, isSigner: false, isWritable: true },
       { pubkey: args.pythPriceFeed, isSigner: false, isWritable: false },
-      ...args.queueShards.map(pk => ({ pubkey: pk, isSigner: false, isWritable: true })),
+      ...allShards.map(pk => ({ pubkey: pk, isSigner: false, isWritable: true })),
     ],
-    data: discriminator("execute_batch"),
+    data: Buffer.concat([
+      discriminator("execute_batch"),
+      writeU8(args.bidShards.length),
+    ]),
   });
 }
 
@@ -444,5 +442,81 @@ export function buildCancelOrderIx(args: {
       { pubkey: args.queueShard, isSigner: false, isWritable: true },
     ],
     data: discriminator("cancel_order"),
+  });
+}
+
+// ----- update_config -----
+
+const NO_CHANGE_U64 = BigInt("18446744073709551615"); // u64::MAX
+
+export function buildUpdateConfigIx(args: {
+  authority: PublicKey;
+  newAuthority?: PublicKey;
+  newFeeRecipient?: PublicKey;
+  protocolFeeBps?: number;
+  maxLeverage?: number;
+  liquidationThreshold?: number;
+  maxTvl?: bigint;
+  isPaused?: boolean;
+  totalUsdcReserve?: bigint;
+  psfBalance?: bigint;
+}): TransactionInstruction {
+  const [config] = findConfigPda();
+  const NO_CHANGE_PK = PublicKey.default;
+
+  const data = Buffer.concat([
+    discriminator("update_config"),
+    (args.newAuthority ?? NO_CHANGE_PK).toBuffer(),
+    (args.newFeeRecipient ?? NO_CHANGE_PK).toBuffer(),
+    writeU64LE(args.protocolFeeBps !== undefined ? BigInt(args.protocolFeeBps) : NO_CHANGE_U64),
+    writeU64LE(args.maxLeverage !== undefined ? BigInt(args.maxLeverage) : NO_CHANGE_U64),
+    writeU64LE(args.liquidationThreshold !== undefined ? BigInt(args.liquidationThreshold) : NO_CHANGE_U64),
+    writeU64LE(args.maxTvl !== undefined ? args.maxTvl : NO_CHANGE_U64),
+    writeU8(args.isPaused !== undefined ? (args.isPaused ? 1 : 0) : 255),
+    writeU64LE(args.totalUsdcReserve !== undefined ? args.totalUsdcReserve : NO_CHANGE_U64),
+    writeU64LE(args.psfBalance !== undefined ? args.psfBalance : NO_CHANGE_U64),
+  ]);
+
+  return new TransactionInstruction({
+    programId: ATOMIC_PERPS_PROGRAM_ID,
+    keys: [
+      { pubkey: args.authority, isSigner: true, isWritable: true },
+      { pubkey: config, isSigner: false, isWritable: true },
+    ],
+    data,
+  });
+}
+
+// ----- init_queue_shard -----
+
+const QUEUE_SEED = Buffer.from("queue");
+const INIT_QUEUE_DISC: Buffer = Buffer.from([0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8]);
+
+export function findQueueShardPda(market: number, side: number, shard: number): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [QUEUE_SEED, Buffer.from([market, side, shard])],
+    ATOMIC_PERPS_PROGRAM_ID,
+  );
+}
+
+export function buildInitQueueShardIx(args: {
+  payer: PublicKey;
+  market: number;
+  side: number;
+  shard: number;
+}): TransactionInstruction {
+  const [queueShard] = findQueueShardPda(args.market, args.side, args.shard);
+  const data = Buffer.concat([
+    INIT_QUEUE_DISC,
+    Buffer.from([args.market, args.side, args.shard]),
+  ]);
+  return new TransactionInstruction({
+    programId: ATOMIC_PERPS_PROGRAM_ID,
+    keys: [
+      { pubkey: args.payer, isSigner: true, isWritable: true },
+      { pubkey: queueShard, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data,
   });
 }

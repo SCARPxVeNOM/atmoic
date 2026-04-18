@@ -217,8 +217,10 @@ describe("atomic_perps", () => {
     // Collateral moved user -> vault.
     expect(vaultSolAfter - vaultSolBefore).to.equal(OPEN_COLLATERAL);
 
-    // Fee split: 10 bps of 100 USDC = 100_000 (6dp).
-    const feeAmount = (OPEN_BORROW * BigInt(DEFAULT_PROTOCOL_FEE_BPS)) / 10_000n;
+    // Fee split: protocol (10 bps) + spread (5 bps default) = 15 bps of 100 USDC.
+    const SPREAD_FEE_BPS = 5n;
+    const totalFeeBps = BigInt(DEFAULT_PROTOCOL_FEE_BPS) + SPREAD_FEE_BPS;
+    const feeAmount = (OPEN_BORROW * totalFeeBps) / 10_000n;
     const userRecv = OPEN_BORROW - feeAmount;
 
     expect(userUsdcAfter - userUsdcBefore).to.equal(userRecv);

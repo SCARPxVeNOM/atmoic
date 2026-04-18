@@ -31,6 +31,8 @@ const DISC_EXEC_BATCH:  [u8; 8] = [0x70, 0x9f, 0xd3, 0x33, 0xee, 0x46, 0xd4, 0x3
 const DISC_PLACE_ORDER: [u8; 8] = [0x14, 0x3e, 0x08, 0x7e, 0x21, 0xc8, 0x81, 0x90];
 #[cfg(feature = "dfba")]
 const DISC_CANCEL_ORDER:[u8; 8] = [0x5f, 0x81, 0xed, 0xf0, 0x08, 0x31, 0xdf, 0x84];
+#[cfg(feature = "dfba")]
+const DISC_INIT_QUEUE:  [u8; 8] = [0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8];
 
 pub fn process_instruction(
     program_id: &Pubkey,
@@ -56,6 +58,8 @@ pub fn process_instruction(
         DISC_PLACE_ORDER  => instructions::place_order::process(program_id, accounts, data),
         #[cfg(feature = "dfba")]
         DISC_CANCEL_ORDER => instructions::cancel_order::process(program_id, accounts, data),
+        #[cfg(feature = "dfba")]
+        DISC_INIT_QUEUE   => instructions::init_queue_shard::process(program_id, accounts, data),
         _ => Err(ProgramError::InvalidInstructionData),
     }
 }
