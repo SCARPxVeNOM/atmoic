@@ -223,6 +223,7 @@ export function buildLiquidateIx(args: {
   solVault: PublicKey;
   feeRecipientSolAccount: PublicKey;
   pythPriceFeed: PublicKey;
+  kaminoRepayData?: Buffer;
 }): TransactionInstruction {
   const [config] = findConfigPda();
   const [programAuthority] = findAuthorityPda();
@@ -241,7 +242,10 @@ export function buildLiquidateIx(args: {
       { pubkey: programAuthority, isSigner: false, isWritable: false },
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     ],
-    data: discriminator("liquidate"),
+    data: Buffer.concat([
+      discriminator("liquidate"),
+      writeVecU8(args.kaminoRepayData ?? Buffer.alloc(0)),
+    ]),
   });
 }
 

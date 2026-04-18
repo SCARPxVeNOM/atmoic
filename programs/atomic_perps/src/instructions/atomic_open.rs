@@ -213,6 +213,7 @@ pub fn process(
         owner: user_key,
         perp_market: *pyth_price_feed.key,
         collateral_mint: config.sol_mint,
+        // Phase 1: reserved for Kamino obligation PDA tracking
         kamino_obligation: Pubkey::default(),
         collateral_amount: params.collateral_amount,
         borrow_amount_usdc: params.borrow_amount,

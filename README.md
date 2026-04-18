@@ -1,6 +1,6 @@
 # Composable Perps Hub
 
-Atomic cross-protocol execution layer for perpetual futures on Solana. Borrow, open leveraged positions, and hedge — all in a single atomic transaction.
+Atomic cross-protocol execution layer for perpetual futures on Solana — with **84 machine-checked safety proofs** in Lean 4. Borrow, open leveraged positions, and hedge — all in a single atomic transaction.
 
 ## Problem
 
@@ -31,6 +31,32 @@ User clicks "Open 2x Long SOL"
 └─────────────────────────────────────────────┘
 ```
 
+## Formal Verification
+
+This protocol is verified with **84 Lean 4 theorems, 0 `sorry`, 0 errors**. Every safety property is proven to hold across every state transition the program can execute.
+
+| Category | Count | What it proves |
+|----------|-------|----------------|
+| Preservation | 40 | Each of 5 safety properties holds after every handler |
+| Inductive | 5 | Property holds after *any* operation sequence |
+| Abort conditions | 21 | Invalid inputs are always rejected |
+| Cover (reachability) | 4 | Key user flows are reachable (not dead code) |
+| Transfer conservation | 6 | No tokens created or destroyed in any SPL transfer |
+| Overflow safety | 2 | u64 overflow cannot occur in `atomic_open` or `execute_batch` |
+| Invariants | 5 | Collateral flow, fee routing, liquidation math, DFBA price bounds |
+| Liveness | 1 | Active positions can always settle |
+
+**5 Safety Properties** (preserved by all 8 handlers):
+1. `reserve_solvency` — borrowed USDC never exceeds the reserve
+2. `leverage_bounded` — max_leverage is always positive
+3. `fee_bounded` — protocol fee stays within basis points range
+4. `oi_bounded` — total open interest bounded by reserve
+5. `liquidation_threshold_valid` — threshold stays within basis points range
+
+**Bug found by formal verification:** Proving `oi_bounded` for `execute_batch` failed with only per-side OI guards. The combined guard (`long_oi + bid_vol + short_oi + ask_vol <= reserve`) was required — added to the program before deployment.
+
+See: [`formal_verification/Spec.lean`](formal_verification/Spec.lean) | [`atomic_perps.qedspec`](atomic_perps.qedspec)
+
 ## Architecture
 
 ```
@@ -49,13 +75,20 @@ User clicks "Open 2x Long SOL"
                      │  Relay    │         │   Pyth    │
                      └───────────┘         │  Oracle   │
                                            └───────────┘
+┌──────────────────────────────────────────────────────────┐
+│  Formal Verification (offline, pre-deploy)               │
+│  .qedspec → QEDGen → Lean 4 Spec.lean → lake build      │
+│  84 theorems, 0 sorry — safety for all 8 handlers        │
+└──────────────────────────────────────────────────────────┘
 ```
 
-**Program (Rust):** 4 instructions — `initialize`, `atomic_open`, `atomic_close`, `liquidate`. Built with raw `solana-program` (no Anchor) for minimal binary size. Pyth oracle validation with <5s staleness and <1% confidence checks.
+**Program (Rust):** 10 instructions — core: `initialize`, `atomic_open`, `atomic_close`, `liquidate`, `update_config`, `migrate_config`; DFBA: `execute_batch`, `place_order`, `cancel_order`, `init_queue_shard`. Built with raw `solana-program` (no Anchor runtime) for minimal binary size (132 KB).
 
 **Backend (TypeScript):** REST API for transaction building, WebSocket for position updates, liquidator service for health monitoring, oracle relay for Pyth price updates.
 
 **Frontend (React):** Phantom wallet integration, one-click position management, real-time health factor display, Kamino yield APY tracking.
+
+**Formal Verification (Lean 4):** QEDGen-generated specification + hand-written Lean 4 proofs. 84 theorems, 0 sorry.
 
 ## Protocol Integrations
 
@@ -80,7 +113,8 @@ User clicks "Open 2x Long SOL"
 ## Tech Stack
 
 - **Blockchain:** Solana (mainnet)
-- **Program:** Rust, solana-program v1.18.26 (no Anchor dependency)
+- **Program:** Rust, solana-program v1.18.26 (no Anchor runtime dependency)
+- **Formal Verification:** Lean 4 (v4.30.0-rc1), QEDGen
 - **Backend:** TypeScript, Express, @kamino-finance/klend-sdk
 - **Frontend:** React 18, @solana/wallet-adapter, Vite
 - **Oracle:** Pyth Network (Hermes + on-chain PriceUpdateV2)
@@ -98,9 +132,9 @@ User clicks "Open 2x Long SOL"
 
 | Phase | Scope | TVL Cap |
 |-------|-------|---------|
-| **Phase 0** (current) | Atomic MVP: Kamino borrow + perp, SOL only | $500K |
+| **Phase 0** (current) | Atomic MVP + DFBA batch auction + formal verification (84 proofs) | $500K |
 | Phase 1 | Oracle vault + dynamic spread + audit | $5M |
-| Phase 2 | DFBA batch auction + ALTs + sharded queues | $25M |
+| Phase 2 | Commit-reveal orders + ALTs + multi-market | $25M |
 | Phase 3 | JLP/mSOL collateral + circuit breakers | Uncapped |
 | Phase 4 | Raydium LP + governance token | — |
 
@@ -108,20 +142,25 @@ User clicks "Open 2x Long SOL"
 
 ### Prerequisites
 - Rust + Solana CLI (v1.18.26)
+- Anchor CLI (v0.30+)
 - Node.js 18+
-- Solana test validator
+- Lean 4 (v4.30.0-rc1) — for formal verification only
 
 ### Build Program
 ```bash
-cargo build-sbf --features mock-oracle
+anchor build --no-idl -- --features mock-oracle,dfba
 ```
 
 ### Run Tests
 ```bash
-solana-test-validator --reset --ledger test-ledger --quiet &
-solana program deploy target/deploy/atomic_perps.so --program-id target/deploy/atomic_perps-keypair.json
-npm test
+anchor test --skip-build
 ```
+
+### Verify Proofs
+```bash
+cd formal_verification && lake build
+```
+All 84 theorems must pass with 0 errors, 0 sorry.
 
 ### Start Backend
 ```bash

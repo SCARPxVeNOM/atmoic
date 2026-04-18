@@ -31,6 +31,7 @@ pub struct GlobalConfig {
     // V2 fields (added by migrate_config)
     pub total_long_oi: u64,
     pub total_short_oi: u64,
+    /// Protection & Stability Fund. Phase 0: accrues only. Spending logic is Phase 2.
     pub psf_balance: u64,
 }
 
@@ -119,6 +120,7 @@ pub struct Position {
     pub owner: Pubkey,
     pub perp_market: Pubkey,
     pub collateral_mint: Pubkey,
+    /// Reserved for Phase 1 Kamino integration. Currently always Pubkey::default().
     pub kamino_obligation: Pubkey,
     pub collateral_amount: u64,
     pub borrow_amount_usdc: u64,

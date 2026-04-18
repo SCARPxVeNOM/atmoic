@@ -2,6 +2,7 @@ use solana_program::{
     account_info::{next_account_info, AccountInfo},
     clock::Clock,
     entrypoint::ProgramResult,
+    program_error::ProgramError,
     pubkey::Pubkey,
     sysvar::Sysvar,
 };
@@ -12,9 +13,7 @@ pub struct LiquidateParams {
 
 impl LiquidateParams {
     fn deserialize(data: &[u8]) -> Option<Self> {
-        if data.len() < 4 {
-            return Some(Self { kamino_repay_data: vec![] });
-        }
+        if data.len() < 4 { return None; }
         let len = u32::from_le_bytes(data[0..4].try_into().unwrap()) as usize;
         if data.len() < 4 + len { return None; }
         Some(Self { kamino_repay_data: data[4..4+len].to_vec() })
@@ -37,7 +36,7 @@ pub fn process(
     data: &[u8],
 ) -> ProgramResult {
     let params = LiquidateParams::deserialize(data)
-        .unwrap_or(LiquidateParams { kamino_repay_data: vec![] });
+        .ok_or(ProgramError::InvalidInstructionData)?;
 
     let iter = &mut accounts.iter();
     let liquidator = next_account_info(iter)?;

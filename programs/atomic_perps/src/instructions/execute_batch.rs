@@ -13,8 +13,6 @@ use crate::utils::oracle::validate_and_get_price;
 use crate::utils::account::{load_config, save_config, ORDER_QUEUE_DISCRIMINATOR};
 use crate::events::{emit_batch_cleared, emit_dfba_fill};
 
-const PYTH_CAP_BPS: u64 = 30; // ±0.3%
-
 /// Lightweight order entry for sorting — avoids copying full 56-byte Order.
 #[derive(Clone, Copy)]
 struct OrderEntry {
@@ -194,16 +192,9 @@ pub fn process(
     // ---- Phase 3: Find clearing price ----
     let (clearing_price, total_matchable) = find_clearing_price(&bids, &asks);
 
-    // If no match possible, just pay the crank and return
+    // No matches — return without paying crank to prevent empty-batch griefing.
     if clearing_price == 0 || total_matchable == 0 {
-        let crank_fee_lamports: u64 = 1_000_000;
-        let rent = solana_program::sysvar::rent::Rent::get()?;
-        let min_balance = rent.minimum_balance(global_config_ai.data_len());
-        let config_lamports = global_config_ai.lamports();
-        if config_lamports > crank_fee_lamports + min_balance {
-            **global_config_ai.try_borrow_mut_lamports()? -= crank_fee_lamports;
-            **crank.try_borrow_mut_lamports()? += crank_fee_lamports;
-        }
+        solana_program::msg!("NoBidsOrAsks: no matches found, crank not paid");
         return Ok(());
     }
 
@@ -300,7 +291,7 @@ pub fn process(
     config.total_long_oi = config.total_long_oi.saturating_add(filled_bid_vol);
     config.total_short_oi = config.total_short_oi.saturating_add(filled_ask_vol);
 
-    // PSF: 10% of matched volume in basis points
+    // PSF accrual only — spending logic deferred to Phase 2
     config.psf_balance = config.psf_balance.saturating_add(total_matchable / 10_000);
 
     save_config(global_config_ai, &config)?;

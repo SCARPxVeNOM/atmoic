@@ -71,3 +71,7 @@ pub const SOL_DECIMALS: u8 = 9;
 // === Liquidation ===
 
 pub const LIQUIDATION_BONUS_BPS: u64 = 500;
+
+// === DFBA (Discrete Frequent Batch Auction) ===
+
+pub const PYTH_CAP_BPS: u64 = 30;
