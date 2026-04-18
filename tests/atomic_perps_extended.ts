@@ -476,4 +476,126 @@ describe("atomic_perps_extended", () => {
       expect(acct!.data.readUInt32LE(8)).to.equal(0);
     });
   });
+
+  // ---- Liquidation tests ----
+  describe("liquidation", () => {
+    it("rejects liquidation of a healthy position", async () => {
+      // Open a well-collateralized position with user3
+      const openIx = buildAtomicOpenIx({
+        user: user3.publicKey,
+        userSolAccount: u3Sol,
+        userUsdcAccount: u3Usdc,
+        solVault,
+        usdcReserve,
+        feeRecipientAccount: feeUsdcAccount,
+        pythPriceFeed: mockPythFeed,
+        collateralAmount: 2n * 10n ** 9n,  // 2 SOL ($300)
+        borrowAmount: 50n * 10n ** 6n,     // 50 USDC (low leverage)
+        perpSide: Side.Long,
+        leverageBps: 2_000,
+        hedgeAmount: 0n,
+        spreadFeeBps: 5,
+        jupiterSwapData: Buffer.alloc(0),
+        kaminoBorrowData: Buffer.alloc(0),
+      });
+      await sendTx(connection, new Transaction().add(openIx), [user3]);
+
+      // Verify position is open
+      const [posPda] = findPositionPda(user3.publicKey);
+      const posAcct = await connection.getAccountInfo(posPda);
+      expect(posAcct).to.not.be.null;
+      const pos = decodePosition(posAcct!.data);
+      expect(pos.isOpen).to.equal(true);
+
+      // User2 tries to liquidate user3's healthy position — should fail
+      const feeSolAccount = await getOrCreateAta(connection, admin, solMint, feeRecipient.publicKey);
+      const liqIx = buildLiquidateIx({
+        liquidator: user2.publicKey,
+        positionOwner: user3.publicKey,
+        liquidatorSolAccount: u2Sol,
+        solVault,
+        feeRecipientSolAccount: feeSolAccount,
+        pythPriceFeed: mockPythFeed,
+      });
+      await expectError(connection, new Transaction().add(liqIx), [user2], 6006);
+
+      // Clean up: close the position
+      await mintTo(connection, admin, usdcMint, u3Usdc, admin, 100_000_000); // top up USDC
+      const closeIx = buildAtomicCloseIx({
+        user: user3.publicKey,
+        userSolAccount: u3Sol,
+        userUsdcAccount: u3Usdc,
+        solVault,
+        usdcReserve,
+        feeRecipientAccount: feeUsdcAccount,
+        pythPriceFeed: mockPythFeed,
+      });
+      await sendTx(connection, new Transaction().add(closeIx), [user3]);
+    });
+  });
+
+  // ---- Queue shard capacity tests ----
+  describe("queue shard capacity", () => {
+    const [capacityShardPda] = findQueueShardPda(0, 0, 1); // shard 1 for capacity tests
+
+    before("init capacity test shard", async () => {
+      const ix = buildInitQueueShardIx({
+        payer: admin.publicKey,
+        market: 0,
+        side: 0,
+        shard: 1,
+      });
+      await sendTx(connection, new Transaction().add(ix), [admin]);
+    });
+
+    it("fills shard to capacity (85 orders)", async () => {
+      for (let i = 0; i < 85; i++) {
+        const ix = buildPlaceOrderIx({
+          user: user2.publicKey,
+          queueShard: capacityShardPda,
+          price: BigInt(150_000_000 + i),  // slightly different prices
+          size: 1_000_000n,
+        });
+        await sendTx(connection, new Transaction().add(ix), [user2]);
+      }
+
+      const acct = await connection.getAccountInfo(capacityShardPda);
+      const count = acct!.data.readUInt32LE(8);
+      expect(count).to.equal(85);
+    });
+
+    it("rejects 86th order (QueueFull)", async () => {
+      const ix = buildPlaceOrderIx({
+        user: user2.publicKey,
+        queueShard: capacityShardPda,
+        price: 150_100_000n,
+        size: 1_000_000n,
+      });
+      await expectError(connection, new Transaction().add(ix), [user2], 6016);
+    });
+
+    it("cancel one then place succeeds", async () => {
+      // Cancel one order
+      const cancelIx = buildCancelOrderIx({
+        user: user2.publicKey,
+        queueShard: capacityShardPda,
+      });
+      await sendTx(connection, new Transaction().add(cancelIx), [user2]);
+
+      let acct = await connection.getAccountInfo(capacityShardPda);
+      expect(acct!.data.readUInt32LE(8)).to.equal(84);
+
+      // Place again — should succeed
+      const placeIx = buildPlaceOrderIx({
+        user: user2.publicKey,
+        queueShard: capacityShardPda,
+        price: 150_200_000n,
+        size: 1_000_000n,
+      });
+      await sendTx(connection, new Transaction().add(placeIx), [user2]);
+
+      acct = await connection.getAccountInfo(capacityShardPda);
+      expect(acct!.data.readUInt32LE(8)).to.equal(85);
+    });
+  });
 });

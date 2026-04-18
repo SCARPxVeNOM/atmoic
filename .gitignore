@@ -40,3 +40,18 @@ Thumbs.db
 
 # Claude internal
 .claude/
+
+# Tool-specific agent directories
+.agents/
+.kiro/
+.qed/
+.trae/
+.windsurf/
+
+# Skills (tool plugins)
+skills/
+skills-lock.json
+
+# QEDGen-generated scaffold (real program is programs/atomic_perps/)
+programs/src/
+programs/Cargo.toml

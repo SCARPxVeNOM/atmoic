@@ -1,0 +1,359 @@
+// Atomic Perps — Composable Perpetual Futures on Solana
+//
+// A DeFi perpetuals protocol with atomic open/close, Kamino lending,
+// Jupiter hedging, and on-chain DFBA (Discrete Frequent Batch Auction)
+// order matching.
+//
+// Lifecycle: initialize -> [Active] -> atomic_open -> atomic_close | liquidate
+
+spec AtomicPerps
+
+program_id "8s677udBiKHkCNYzGEroenfN23k1vQjqR3JQvHjZcDWg"
+
+// === Constants ===
+
+const BPS_DENOMINATOR = 10_000
+const LIQUIDATION_BONUS_BPS = 500
+const MAX_ORDERS_PER_SHARD = 85
+const PYTH_CAP_BPS = 30
+const OI_CAP_PCT = 80
+const MIN_SPREAD_BPS = 5
+
+// === State ===
+
+type State
+  | Uninitialized
+  | Active of {
+      authority              : Pubkey,
+      fee_recipient          : Pubkey,
+      pyth_sol_feed          : Pubkey,
+      sol_mint               : Pubkey,
+      usdc_mint              : Pubkey,
+      sol_vault              : Pubkey,
+      usdc_reserve           : Pubkey,
+      is_paused              : U64,
+      max_leverage           : U64,
+      liquidation_threshold  : U64,
+      protocol_fee_bps       : U64,
+      max_tvl                : U64,
+      total_usdc_borrowed    : U64,
+      total_usdc_reserve     : U64,
+      total_long_oi          : U64,
+      total_short_oi         : U64,
+      psf_balance            : U64,
+    }
+
+// === Error Types ===
+
+type Error
+  | OracleStale              = 6000 "Oracle price feed is stale"
+  | OracleConfidenceTooWide  = 6001 "Oracle confidence interval too wide"
+  | InvalidOracleFeed        = 6002 "Price feed not in allowed whitelist"
+  | ExcessiveLeverage        = 6003 "Implied leverage exceeds max_leverage"
+  | InsufficientCollateral   = 6004 "Collateral or borrow amount invalid"
+  | PositionUnhealthy        = 6005 "Position health factor below 1.0"
+  | PositionHealthy          = 6006 "Position is healthy, cannot liquidate"
+  | PositionNotOpen          = 6007 "Position is not open"
+  | TVLCapExceeded           = 6008 "Total borrow or OI exceeds cap"
+  | ProtocolPaused           = 6009 "Protocol is paused"
+  | Unauthorized             = 6010 "Signer not authorized"
+  | InvalidProgramId         = 6011 "Invalid program ID"
+  | MathOverflow             = 6012 "Arithmetic overflow"
+  | InvalidCollateralMint    = 6013 "Token mint does not match config"
+  | BadInput                 = 6014 "Generic bad input"
+  | FillsSuspended           = 6015 "Vault skew above 90 pct, fills suspended"
+  | QueueFull                = 6016 "Order queue shard is full"
+  | CommitmentNotFound       = 6017 "Commitment PDA not found"
+  | CommitmentAlreadyRevealed = 6018 "Commitment already revealed"
+  | HashMismatch             = 6019 "Reveal hash does not match commitment"
+  | OrderNotFound            = 6020 "User order not found in shard"
+  | NoBidsOrAsks             = 6021 "No bids or asks to match"
+
+// === PDA Seeds ===
+
+pda config ["config"]
+pda position ["position", user]
+pda authority ["authority"]
+
+// === Events ===
+
+event ConfigInitialized { authority : Pubkey, max_leverage : U64, protocol_fee_bps : U64, max_tvl : U64 }
+event PositionOpened { owner : Pubkey, collateral : U64, borrow : U64, side : U64, entry_price : U64 }
+event PositionClosed { owner : Pubkey, exit_price : U64, pnl : U64, collateral_returned : U64 }
+event PositionLiquidated { owner : Pubkey, liquidator : Pubkey, health : U64, collateral : U64 }
+event BatchCleared { clearing_price : U64, pyth_price : U64, total_volume : U64, num_fills : U64 }
+event DfbaFill { user : Pubkey, side : U64, clearing_price : U64, fill_size : U64 }
+event PsfLow { balance : U64, threshold : U64 }
+
+// ============================================================
+// Handlers
+// ============================================================
+
+/// One-time protocol initialization. Creates GlobalConfig PDA.
+handler initialize (max_leverage : U64) (liquidation_threshold : U64) (protocol_fee_bps : U64) (max_tvl : U64) : State.Uninitialized -> State.Active {
+  auth authority
+
+  accounts {
+    authority        : signer, writable
+    global_config    : writable, pda ["config"]
+    program_authority : readonly, pda ["authority"]
+    sol_vault        : readonly
+    usdc_reserve     : readonly
+    system_program   : program
+  }
+
+  requires max_leverage > 0 else BadInput
+  requires liquidation_threshold > 0 else BadInput
+  requires liquidation_threshold <= BPS_DENOMINATOR else BadInput
+  requires protocol_fee_bps <= BPS_DENOMINATOR else BadInput
+
+  effect {
+    max_leverage          := max_leverage
+    liquidation_threshold := liquidation_threshold
+    protocol_fee_bps      := protocol_fee_bps
+    max_tvl               := max_tvl
+    total_usdc_borrowed   := 0
+    total_long_oi         := 0
+    total_short_oi        := 0
+    psf_balance           := 0
+    is_paused             := 0
+  }
+
+  emits ConfigInitialized
+}
+
+/// Admin updates config parameters.
+handler update_config : State.Active -> State.Active {
+  auth authority
+
+  accounts {
+    authority     : signer
+    global_config : writable, pda ["config"]
+  }
+
+  requires authority == state.authority else Unauthorized
+}
+
+/// Open a synthetic perp position atomically.
+handler atomic_open (collateral_amount : U64) (borrow_amount : U64) (leverage_bps : U64) (spread_fee_bps : U64) : State.Active -> State.Active {
+  auth user
+
+  accounts {
+    user                  : signer, writable
+    global_config         : writable, pda ["config"]
+    position              : writable, pda ["position", user]
+    pyth_price_feed       : readonly
+    user_sol_account      : writable
+    sol_vault             : writable
+    usdc_reserve          : writable
+    user_usdc_account     : writable
+    fee_recipient_account : writable
+    program_authority     : readonly, pda ["authority"]
+    token_program         : program
+    system_program        : program
+  }
+
+  // Input validation
+  requires state.is_paused == 0 else ProtocolPaused
+  requires collateral_amount > 0 else InsufficientCollateral
+  requires borrow_amount > 0 else InsufficientCollateral
+  requires leverage_bps <= state.max_leverage else ExcessiveLeverage
+  requires spread_fee_bps >= MIN_SPREAD_BPS else BadInput
+
+  // TVL checks
+  requires state.total_usdc_borrowed + borrow_amount <= state.total_usdc_reserve else InsufficientCollateral
+  requires state.total_usdc_borrowed + borrow_amount <= state.max_tvl else TVLCapExceeded
+
+  // OI hard cap: total OI must not exceed 80% of reserve
+  requires state.total_long_oi + state.total_short_oi <= state.total_usdc_reserve * OI_CAP_PCT / 100 else TVLCapExceeded
+
+  effect {
+    total_usdc_borrowed += borrow_amount
+  }
+
+  transfers {
+    from user_sol_account to sol_vault amount collateral_amount authority user
+  }
+
+  emits PositionOpened
+}
+
+/// Close a position: repay borrow, settle PnL, return collateral.
+handler atomic_close (borrow_amount : U64) (collateral_to_return : U64) (fee_amount : U64) : State.Active -> State.Active {
+  auth user
+
+  accounts {
+    user                  : signer
+    global_config         : writable, pda ["config"]
+    position              : writable, pda ["position", user]
+    pyth_price_feed       : readonly
+    user_usdc_account     : writable
+    usdc_reserve          : writable
+    sol_vault             : writable
+    user_sol_account      : writable
+    fee_recipient_account : writable
+    program_authority     : readonly, pda ["authority"]
+    token_program         : program
+  }
+
+  requires borrow_amount > 0 else BadInput
+  requires borrow_amount <= state.total_usdc_borrowed else BadInput
+
+  effect {
+    total_usdc_borrowed -= borrow_amount
+  }
+
+  transfers {
+    from user_usdc_account to usdc_reserve amount borrow_amount authority user
+    from sol_vault to user_sol_account amount collateral_to_return authority program_authority
+    from usdc_reserve to fee_recipient_account amount fee_amount authority program_authority
+  }
+
+  emits PositionClosed
+}
+
+/// Liquidate an unhealthy position. Permissionless.
+handler liquidate (borrow_amount : U64) (collateral_amount : U64) : State.Active -> State.Active {
+  auth liquidator
+
+  accounts {
+    liquidator                : signer
+    global_config             : writable, pda ["config"]
+    position                  : writable
+    pyth_price_feed           : readonly
+    sol_vault                 : writable
+    liquidator_sol_account    : writable
+    fee_recipient_sol_account : writable
+    program_authority         : readonly, pda ["authority"]
+    token_program             : program
+  }
+
+  requires borrow_amount > 0 else BadInput
+  requires borrow_amount <= state.total_usdc_borrowed else BadInput
+
+  let bonus_amount = collateral_amount * LIQUIDATION_BONUS_BPS / BPS_DENOMINATOR
+  let remainder = collateral_amount - bonus_amount
+
+  effect {
+    total_usdc_borrowed -= borrow_amount
+  }
+
+  transfers {
+    from sol_vault to liquidator_sol_account amount bonus_amount authority program_authority
+    from sol_vault to fee_recipient_sol_account amount remainder authority program_authority
+  }
+
+  emits PositionLiquidated
+}
+
+/// Place a limit order into a DFBA queue shard.
+handler place_order (price : U64) (size : U64) : State.Active -> State.Active {
+  auth user
+
+  accounts {
+    user        : signer
+    queue_shard : writable
+  }
+
+  requires price > 0 else BadInput
+  requires size > 0 else BadInput
+
+  // No global state effect — order is written to the queue shard account data
+  // State fields are unchanged by place_order
+}
+
+/// Cancel a user order from a queue shard. Only the owner can cancel.
+handler cancel_order : State.Active -> State.Active {
+  auth user
+
+  accounts {
+    user        : signer
+    queue_shard : writable
+  }
+}
+
+/// Permissionless DFBA batch execution: matches bids and asks on-chain.
+handler execute_batch (matched_bid_volume : U64) (matched_ask_volume : U64) (total_matchable : U64) : State.Active -> State.Active {
+  auth crank
+
+  accounts {
+    crank           : signer, writable
+    global_config   : writable, pda ["config"]
+    pyth_price_feed : readonly
+  }
+
+  // OI uses saturating_add on-chain, so no overflow possible, but declare bounds
+  requires state.total_long_oi + matched_bid_volume <= state.total_usdc_reserve else TVLCapExceeded
+  requires state.total_short_oi + matched_ask_volume <= state.total_usdc_reserve else TVLCapExceeded
+  // Combined OI guard: formal verification proved per-side guards insufficient to preserve oi_bounded
+  requires state.total_long_oi + matched_bid_volume + state.total_short_oi + matched_ask_volume <= state.total_usdc_reserve else TVLCapExceeded
+
+  effect {
+    total_long_oi  += matched_bid_volume
+    total_short_oi += matched_ask_volume
+    psf_balance    += total_matchable / BPS_DENOMINATOR
+  }
+
+  emits BatchCleared
+}
+
+// ============================================================
+// Properties
+// ============================================================
+
+/// Borrowed USDC never exceeds the reserve.
+property reserve_solvency :
+  state.total_usdc_borrowed <= state.total_usdc_reserve
+  preserved_by [initialize, atomic_open, atomic_close, liquidate, execute_batch, place_order, cancel_order]
+
+/// Leverage is bounded: max_leverage is always positive after initialize.
+property leverage_bounded :
+  state.max_leverage > 0
+  preserved_by [initialize, update_config]
+
+/// Protocol fee is bounded within basis points.
+property fee_bounded :
+  state.protocol_fee_bps <= BPS_DENOMINATOR
+  preserved_by [initialize, update_config]
+
+/// OI fields are non-negative and bounded by reserve.
+property oi_bounded :
+  state.total_long_oi + state.total_short_oi <= state.total_usdc_reserve
+  preserved_by [initialize, atomic_open, atomic_close, liquidate, execute_batch]
+
+/// Liquidation threshold is within basis points range.
+property liquidation_threshold_valid :
+  state.liquidation_threshold <= BPS_DENOMINATOR
+  preserved_by [initialize, update_config]
+
+// ============================================================
+// Invariants
+// ============================================================
+
+invariant authority_set "authority is always a valid non-default pubkey after initialize"
+
+invariant collateral_flow "collateral moves user to vault on open, vault to user on close, never created or destroyed"
+
+invariant fee_routing "protocol fees always route to fee_recipient, never to vault or reserve"
+
+invariant liquidation_incentive "liquidator receives 5 pct bonus of collateral, remainder goes to fee_recipient"
+
+invariant clearing_price_bounded "DFBA clearing price is always within Pyth plus minus 0.3 pct"
+
+// ============================================================
+// Cover (reachability traces)
+// ============================================================
+
+cover happy_long [initialize, atomic_open, atomic_close]
+
+cover liquidation_path [initialize, atomic_open, liquidate]
+
+cover dfba_cycle [initialize, place_order, place_order, execute_batch]
+
+cover cancel_flow [initialize, place_order, cancel_order]
+
+// ============================================================
+// Liveness
+// ============================================================
+
+liveness position_settles : State.Active ~> State.Active via [atomic_close, liquidate] within 1

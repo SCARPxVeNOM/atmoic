@@ -222,6 +222,8 @@ pub fn process(
         if remaining == 0 { break; }
         let fill = bid.size.min(remaining);
         bid_fills[i] = fill;
+        // Slippage invariant: bid filled at clearing_price <= bid.price
+        debug_assert!(clearing_price <= bid.price);
         filled_bid_vol = filled_bid_vol.saturating_add(fill);
     }
 
@@ -232,6 +234,8 @@ pub fn process(
         if remaining == 0 { break; }
         let fill = ask.size.min(remaining);
         ask_fills[i] = fill;
+        // Slippage invariant: ask filled at clearing_price >= ask.price
+        debug_assert!(clearing_price >= ask.price);
         filled_ask_vol = filled_ask_vol.saturating_add(fill);
     }
 
@@ -268,8 +272,29 @@ pub fn process(
     compact_shards(bid_shards, &bids, &bid_fills)?;
     compact_shards(ask_shards, &asks, &ask_fills)?;
 
-    // ---- Phase 7: Accounting ----
+    // ---- Phase 6b: OI guards (spec: execute_batch requires clauses) ----
     let mut config = load_config(global_config_ai)?;
+
+    // Per-side OI guards
+    ensure!(
+        config.total_long_oi.saturating_add(filled_bid_vol) <= config.total_usdc_reserve,
+        AtomicPerpsError::TVLCapExceeded
+    );
+    ensure!(
+        config.total_short_oi.saturating_add(filled_ask_vol) <= config.total_usdc_reserve,
+        AtomicPerpsError::TVLCapExceeded
+    );
+    // Combined OI guard: formal verification proved per-side guards insufficient
+    // to preserve oi_bounded (total_long + total_short <= reserve)
+    ensure!(
+        config.total_long_oi.saturating_add(filled_bid_vol)
+            .saturating_add(config.total_short_oi)
+            .saturating_add(filled_ask_vol)
+            <= config.total_usdc_reserve,
+        AtomicPerpsError::TVLCapExceeded
+    );
+
+    // ---- Phase 7: Accounting ----
 
     // OI update: bid fills add to long OI, ask fills add to short OI
     config.total_long_oi = config.total_long_oi.saturating_add(filled_bid_vol);
