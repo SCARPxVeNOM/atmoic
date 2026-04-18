@@ -58,10 +58,12 @@ function loadKeypair(p: string): Keypair {
 async function main() {
   const connection = new Connection(RPC_URL, "confirmed");
   const authority = loadKeypair(KEYPAIR_PATH);
-  const slot = await connection.getSlot();
+  // Use a slot slightly in the past to avoid "not a recent slot" errors
+  const currentSlot = await connection.getSlot();
+  const slot = currentSlot - 150;
 
   console.log("Authority:", authority.publicKey.toBase58());
-  console.log("Creating ALT at slot:", slot);
+  console.log("Creating ALT at slot:", slot, "(current:", currentSlot, ")");
 
   // Create ALT
   const [createIx, altAddress] = AddressLookupTableProgram.createLookupTable({

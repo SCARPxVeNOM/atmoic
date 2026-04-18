@@ -147,7 +147,9 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+// Property-based tests — run with: cargo test --features proptest-tests
+// Gated behind feature to avoid SBF toolchain conflicts with proptest crate.
+#[cfg(all(test, feature = "proptest-tests"))]
 mod proptests {
     use super::*;
     use proptest::prelude::*;

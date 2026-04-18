@@ -13,9 +13,9 @@ default = []
 kamino-cpi = []
 mock-oracle = []
 dfba = []
+proptest-tests = ["proptest"]
 
 [dependencies]
 solana-program = "=1.18.26"
+proptest = { version = "=1.2.0", optional = true }
 
-[dev-dependencies]
-proptest = "1.4"
