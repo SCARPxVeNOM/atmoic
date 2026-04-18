@@ -98,6 +98,13 @@ See: [`formal_verification/Spec.lean`](formal_verification/Spec.lean) | [`atomic
 | **Pyth Network** | SOL/USD price oracle | On-chain PriceUpdateV2 parsing |
 | **Jupiter** | Optional spot hedge swaps | CPI pass-through (feature-gated) |
 
+## Target Users
+
+- **Kamino/Jupiter power users** — already depositing on Solana, want leveraged exposure without leaving the ecosystem
+- **Yield farmers** — want collateral earning yield while positions are open
+- **Drift refugees** — seeking composable alternatives with atomic execution
+- Not targeting Hyperliquid users — different product thesis (composability vs speed)
+
 ## Risk Parameters (Phase 0)
 
 | Parameter | Value | Source |
@@ -133,7 +140,7 @@ See: [`formal_verification/Spec.lean`](formal_verification/Spec.lean) | [`atomic
 | Phase | Scope | TVL Cap |
 |-------|-------|---------|
 | **Phase 0** (current) | Atomic MVP + DFBA batch auction + formal verification (84 proofs) | $500K |
-| Phase 1 | Oracle vault + dynamic spread + audit | $5M |
+| Phase 1 | Oracle vault + dynamic spread + on-chain funding settlement + audit | $5M |
 | Phase 2 | Commit-reveal orders + ALTs + multi-market | $25M |
 | Phase 3 | JLP/mSOL collateral + circuit breakers | Uncapped |
 | Phase 4 | Raydium LP + governance token | — |

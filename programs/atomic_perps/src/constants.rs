@@ -75,3 +75,8 @@ pub const LIQUIDATION_BONUS_BPS: u64 = 500;
 // === DFBA (Discrete Frequent Batch Auction) ===
 
 pub const PYTH_CAP_BPS: u64 = 30;
+
+// === Risk Parameters (must match qedspec constants) ===
+
+pub const OI_CAP_PCT: u64 = 80;
+pub const MIN_SPREAD_BPS: u16 = 5;

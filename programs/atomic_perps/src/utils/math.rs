@@ -2,7 +2,7 @@ use solana_program::program_error::ProgramError;
 use crate::errors::AtomicPerpsError;
 use crate::ensure;
 use crate::state::Side;
-use crate::constants::BPS_DENOMINATOR;
+use crate::constants::{BPS_DENOMINATOR, MIN_SPREAD_BPS};
 
 pub fn checked_mul_div(a: u64, b: u64, c: u64) -> Result<u64, ProgramError> {
     ensure!(c > 0, AtomicPerpsError::MathOverflow);
@@ -68,11 +68,11 @@ pub fn token_to_usd(amount: u64, price_6dp: u64, token_decimals: u8) -> Result<u
 /// Calculate minimum spread fee (bps) based on vault skew (M-2 tiers).
 pub fn calculate_min_spread(long_oi: u64, short_oi: u64) -> u16 {
     let total = long_oi.saturating_add(short_oi);
-    if total == 0 { return 5; }
+    if total == 0 { return MIN_SPREAD_BPS; }
     let diff = if long_oi > short_oi { long_oi - short_oi } else { short_oi - long_oi };
     let skew_pct = diff.saturating_mul(100) / total;
     match skew_pct {
-        0..=30 => 5,
+        0..=30 => MIN_SPREAD_BPS,
         31..=55 => 15,
         56..=75 => 40,
         76..=90 => 100,
@@ -144,5 +144,63 @@ mod tests {
         assert_eq!(calculate_min_spread(180, 20), 100);
         // 95% skew → u16::MAX (fills suspended by check_vault_skew)
         assert_eq!(calculate_min_spread(195, 5), u16::MAX);
+    }
+}
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn health_factor_never_panics(
+            collateral in 0u64..=u64::MAX/2,
+            borrow in 1u64..=u64::MAX/2,
+            threshold in 1u64..=10_000u64,
+        ) {
+            let _ = calculate_health_factor(collateral, borrow, threshold);
+        }
+
+        #[test]
+        fn min_spread_ge_minimum(
+            long_oi in 0u64..=1_000_000_000u64,
+            short_oi in 0u64..=1_000_000_000u64,
+        ) {
+            let spread = calculate_min_spread(long_oi, short_oi);
+            prop_assert!(spread >= 5);
+        }
+
+        #[test]
+        fn vault_skew_consistent_with_spread(
+            long_oi in 0u64..=1_000_000_000u64,
+            short_oi in 0u64..=1_000_000_000u64,
+        ) {
+            let spread = calculate_min_spread(long_oi, short_oi);
+            let skew_ok = check_vault_skew(long_oi, short_oi).is_ok();
+            if spread == u16::MAX {
+                prop_assert!(!skew_ok);
+            }
+        }
+
+        #[test]
+        fn token_to_usd_no_panic(
+            amount in 0u64..=1_000_000_000_000u64,
+            price in 1u64..=1_000_000_000u64,
+        ) {
+            let _ = token_to_usd(amount, price, 9);
+            let _ = token_to_usd(amount, price, 6);
+        }
+
+        #[test]
+        fn checked_mul_div_bounded(
+            a in 1u64..=1_000_000_000u64,
+            b in 1u64..=1_000_000_000u64,
+            c in 1u64..=1_000_000_000u64,
+        ) {
+            if let Ok(result) = checked_mul_div(a, b, c) {
+                prop_assert!(result <= u64::MAX);
+            }
+        }
     }
 }

@@ -29,6 +29,8 @@ pub struct GlobalConfig {
     pub bump: u8,
     pub program_authority_bump: u8,
     // V2 fields (added by migrate_config)
+    // Funding rate: computed off-chain via backend/src/lib/funding.ts (8h Pyth TWAP per M-1).
+    // On-chain settlement deferred to Phase 1.
     pub total_long_oi: u64,
     pub total_short_oi: u64,
     /// Protection & Stability Fund. Phase 0: accrues only. Spending logic is Phase 2.

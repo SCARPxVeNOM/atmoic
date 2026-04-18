@@ -148,7 +148,7 @@ pub fn process(
         Side::Short => config.total_long_oi
             .saturating_add(config.total_short_oi.saturating_add(preview_size)),
     };
-    let oi_cap = config.total_usdc_reserve * 80 / 100;
+    let oi_cap = config.total_usdc_reserve * OI_CAP_PCT / 100;
     ensure!(new_total_oi <= oi_cap, AtomicPerpsError::TVLCapExceeded);
 
     // -------- 3c. PSF health check — warn if balance < 5% of reserve (F-02) --------
