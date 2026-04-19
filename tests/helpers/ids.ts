@@ -38,6 +38,8 @@ export const DEFAULT_MAX_TVL = 500_000_000_000n; // 500k USDC (6dp)
 
 export const SOL_DECIMALS = 9;
 export const USDC_DECIMALS = 6;
+export const JLP_DECIMALS = 6;
+export const MSOL_DECIMALS = 9;
 
 // Side enum discriminant (matches Rust Side)
 export enum Side {

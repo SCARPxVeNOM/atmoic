@@ -35,11 +35,22 @@ pub struct GlobalConfig {
     pub total_short_oi: u64,
     /// Protection & Stability Fund. Phase 0: accrues only. Spending logic is Phase 2.
     pub psf_balance: u64,
+    // V3 fields (multi-collateral support)
+    pub jlp_mint: Pubkey,
+    pub jlp_vault: Pubkey,
+    pub msol_mint: Pubkey,
+    pub msol_vault: Pubkey,
+    pub pyth_msol_feed: Pubkey,
+    pub stress_active: bool,
+    pub total_correlated_collateral: u64,
+    pub total_collateral: u64,
 }
 
 impl GlobalConfig {
     pub const V1_SPACE: usize = 275; // Original layout
-    pub const INIT_SPACE: usize = 299; // V1 + 3*u64(24)
+    pub const V2_SPACE: usize = 299; // V1 + 3*u64(24)
+    // V3: V2 + 5*Pubkey(160) + bool(1) + 2*u64(16) = 299 + 177 = 476
+    pub const INIT_SPACE: usize = 476;
 
     pub fn deserialize(data: &[u8]) -> Option<Self> {
         if data.len() < Self::V1_SPACE { return None; }
@@ -70,10 +81,28 @@ impl GlobalConfig {
         let program_authority_bump = { let v = data[o]; o += 1; v };
 
         // V2 fields — default to 0 if account hasn't been migrated yet
-        let (total_long_oi, total_short_oi, psf_balance) = if data.len() >= Self::INIT_SPACE {
+        let (total_long_oi, total_short_oi, psf_balance) = if data.len() >= Self::V2_SPACE {
             (u64le(data, &mut o), u64le(data, &mut o), u64le(data, &mut o))
         } else {
             (0, 0, 0)
+        };
+
+        // V3 fields — multi-collateral support
+        let (jlp_mint, jlp_vault, msol_mint, msol_vault, pyth_msol_feed,
+             stress_active, total_correlated_collateral, total_collateral) =
+        if data.len() >= Self::INIT_SPACE {
+            let jm = pk(data, &mut o);
+            let jv = pk(data, &mut o);
+            let mm = pk(data, &mut o);
+            let mv = pk(data, &mut o);
+            let pf = pk(data, &mut o);
+            let sa = { let v = data[o]; o += 1; v != 0 };
+            let tcc = u64le(data, &mut o);
+            let tc = u64le(data, &mut o);
+            (jm, jv, mm, mv, pf, sa, tcc, tc)
+        } else {
+            (Pubkey::default(), Pubkey::default(), Pubkey::default(),
+             Pubkey::default(), Pubkey::default(), false, 0, 0)
         };
 
         Some(Self {
@@ -81,6 +110,8 @@ impl GlobalConfig {
             sol_vault, usdc_reserve, is_paused, max_leverage, liquidation_threshold,
             protocol_fee_bps, max_tvl, total_usdc_borrowed, total_usdc_reserve,
             bump, program_authority_bump, total_long_oi, total_short_oi, psf_balance,
+            jlp_mint, jlp_vault, msol_mint, msol_vault, pyth_msol_feed,
+            stress_active, total_correlated_collateral, total_collateral,
         })
     }
 
@@ -109,10 +140,21 @@ impl GlobalConfig {
         buf[o] = self.bump; o += 1;
         buf[o] = self.program_authority_bump; o += 1;
         // V2 fields
+        if buf.len() >= Self::V2_SPACE {
+            wu64(buf, &mut o, self.total_long_oi);
+            wu64(buf, &mut o, self.total_short_oi);
+            wu64(buf, &mut o, self.psf_balance);
+        }
+        // V3 fields
         if buf.len() >= Self::INIT_SPACE {
-            buf[o..o+8].copy_from_slice(&self.total_long_oi.to_le_bytes()); o += 8;
-            buf[o..o+8].copy_from_slice(&self.total_short_oi.to_le_bytes()); o += 8;
-            buf[o..o+8].copy_from_slice(&self.psf_balance.to_le_bytes());
+            wpk(buf, &mut o, &self.jlp_mint);
+            wpk(buf, &mut o, &self.jlp_vault);
+            wpk(buf, &mut o, &self.msol_mint);
+            wpk(buf, &mut o, &self.msol_vault);
+            wpk(buf, &mut o, &self.pyth_msol_feed);
+            buf[o] = self.stress_active as u8; o += 1;
+            wu64(buf, &mut o, self.total_correlated_collateral);
+            wu64(buf, &mut o, self.total_collateral);
         }
     }
 }
@@ -131,13 +173,17 @@ pub struct Position {
     pub entry_price: u64,
     pub opened_at: i64,
     pub hedge_amount: u64,
+    // V3: collateral price at open time (6dp) — for JLP max(entry,current) health rule
+    pub collateral_entry_price: u64,
     pub is_open: bool,
     pub bump: u8,
 }
 
 impl Position {
     pub const V1_SPACE: usize = 107; // Original layout without new fields
-    pub const INIT_SPACE: usize = 179; // V1 + 32(collateral_mint) + 32(kamino_obligation) + 8(hedge_amount)
+    pub const V2_SPACE: usize = 179; // V1 + 32(collateral_mint) + 32(kamino_obligation) + 8(hedge_amount)
+    // V3: V2 + 8(collateral_entry_price) = 187
+    pub const INIT_SPACE: usize = 187;
 
     pub fn deserialize(data: &[u8]) -> Option<Self> {
         if data.len() < Self::V1_SPACE { return None; }
@@ -162,7 +208,15 @@ impl Position {
         let opened_at = i64::from_le_bytes(data[o..o+8].try_into().unwrap()); o += 8;
 
         // V2: hedge_amount after opened_at
-        let hedge_amount = if data.len() >= Self::INIT_SPACE {
+        let hedge_amount = if data.len() >= Self::V2_SPACE {
+            let v = u64::from_le_bytes(data[o..o+8].try_into().unwrap()); o += 8;
+            v
+        } else {
+            0
+        };
+
+        // V3: collateral_entry_price
+        let collateral_entry_price = if data.len() >= Self::INIT_SPACE {
             let v = u64::from_le_bytes(data[o..o+8].try_into().unwrap()); o += 8;
             v
         } else {
@@ -171,7 +225,7 @@ impl Position {
 
         let is_open = data[o] != 0; o += 1;
         let bump = data[o];
-        Some(Self { owner, perp_market, collateral_mint, kamino_obligation, collateral_amount, borrow_amount_usdc, perp_side, perp_size, entry_price, opened_at, hedge_amount, is_open, bump })
+        Some(Self { owner, perp_market, collateral_mint, kamino_obligation, collateral_amount, borrow_amount_usdc, perp_side, perp_size, entry_price, opened_at, hedge_amount, collateral_entry_price, is_open, bump })
     }
 
     pub fn serialize_into(&self, buf: &mut [u8]) {
@@ -187,6 +241,7 @@ impl Position {
         buf[o..o+8].copy_from_slice(&self.entry_price.to_le_bytes()); o += 8;
         buf[o..o+8].copy_from_slice(&self.opened_at.to_le_bytes()); o += 8;
         buf[o..o+8].copy_from_slice(&self.hedge_amount.to_le_bytes()); o += 8;
+        buf[o..o+8].copy_from_slice(&self.collateral_entry_price.to_le_bytes()); o += 8;
         buf[o] = self.is_open as u8; o += 1;
         buf[o] = self.bump;
     }

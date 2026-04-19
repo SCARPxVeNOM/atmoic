@@ -28,4 +28,6 @@ export const env = {
   altAddress: process.env.ALT_ADDRESS,
   circuitBreakerThresholdBps: Number(process.env.CIRCUIT_BREAKER_THRESHOLD_BPS ?? 1500),
   pagerdutyKey: process.env.PAGERDUTY_KEY,
+  jitoBlockEngineUrl: process.env.JITO_BLOCK_ENGINE_URL ?? "https://mainnet.block-engine.jito.wtf",
+  jitoBundleEnabled: process.env.JITO_BUNDLE_ENABLED === "true",
 };

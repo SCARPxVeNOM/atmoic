@@ -76,6 +76,41 @@ pub const LIQUIDATION_BONUS_BPS: u64 = 500;
 
 pub const PYTH_CAP_BPS: u64 = 30;
 
+// === Multi-Collateral Mints (mainnet) ===
+
+pub const MSOL_MINT: Pubkey =
+    solana_program::pubkey!("mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So");
+
+pub const JLP_MINT: Pubkey =
+    solana_program::pubkey!("27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4");
+
+pub const MSOL_DECIMALS: u8 = 9;
+pub const JLP_DECIMALS: u8 = 6;
+
+// === Haircuts (BPS) — applied to collateral value for health calculation ===
+
+pub const HAIRCUT_SOL_BPS: u64 = 1_000;   // 10%
+pub const HAIRCUT_MSOL_BPS: u64 = 1_800;  // 18%  (SOL 10% + 8% depeg risk)
+pub const HAIRCUT_JLP_BPS: u64 = 2_500;   // 25%
+
+// === Correlated Collateral Cap ===
+
+pub const CORRELATED_CAP_BPS: u64 = 3_000; // 30% — JLP+mSOL must be ≤30% of total collateral
+
+// === JLP Risk Parameters ===
+
+pub const JLP_LIQUIDATION_GRACE_SECONDS: i64 = 7_200; // 2 hours
+pub const JLP_PRICE_SANITY_FACTOR: u64 = 5; // JLP price must be within 1/5x–5x of SOL
+
+// === Pyth mSOL/USD Feed ID (mainnet hex) ===
+
+pub const PYTH_MSOL_USD_FEED_ID: [u8; 32] = [
+    0xc2, 0x28, 0x9a, 0x6a, 0x43, 0xd2, 0xce, 0x91,
+    0xc6, 0xf5, 0x5c, 0xae, 0xc3, 0x70, 0xf4, 0xac,
+    0xc3, 0x8a, 0x2e, 0xd4, 0x77, 0xf5, 0x88, 0x13,
+    0x33, 0x4c, 0x6d, 0x03, 0x74, 0x9f, 0xf2, 0xa4,
+];
+
 // === Risk Parameters (must match qedspec constants) ===
 
 pub const OI_CAP_PCT: u64 = 80;

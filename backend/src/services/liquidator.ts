@@ -11,9 +11,38 @@ import { fetchLatestPrice } from "../lib/pyth";
 import { buildLiquidateIx } from "../lib/ix-builders";
 import { buildKaminoRepay, extractIxForCpi } from "../lib/kamino";
 
-import { requiresGracePeriod, getGracePeriodMs } from "../lib/haircuts";
+import { CollateralType, requiresGracePeriod, getGracePeriodMs } from "../lib/haircuts";
+import { GlobalConfigData } from "../lib/decode";
 
 const log = pino({ transport: { target: "pino-pretty" } } as any);
+
+// Well-known mints for collateral type resolution
+const JLP_MINT_STR = "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4";
+const MSOL_MINT_STR = "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So";
+
+function resolveCollateralType(mint: PublicKey, config: GlobalConfigData): CollateralType {
+  const mintStr = mint.toBase58();
+  if (mintStr === JLP_MINT_STR || mint.equals(config.jlpMint)) return "JLP";
+  if (mintStr === MSOL_MINT_STR || mint.equals(config.msolMint)) return "mSOL";
+  return "SOL";
+}
+
+function resolveCollateralVaultAndPrice(
+  collType: CollateralType,
+  config: GlobalConfigData,
+  solPrice6dp: bigint,
+): { vault: PublicKey; mint: PublicKey; msolFeed?: PublicKey; collateralPrice?: bigint } {
+  switch (collType) {
+    case "JLP":
+      // JLP price: would need Jupiter pool fetch here. For now pass SOL price as placeholder
+      // (on-chain validates within 5x bounds). Full JLP pricing comes from lib/jlp.ts.
+      return { vault: config.jlpVault, mint: config.jlpMint, collateralPrice: solPrice6dp };
+    case "mSOL":
+      return { vault: config.msolVault, mint: config.msolMint, msolFeed: config.pythMsolFeed };
+    default:
+      return { vault: config.solVault, mint: config.solMint };
+  }
+}
 
 // Warning at 120% health (before 100% liquidation threshold)
 const WARNING_THRESHOLD_BPS = 12_000n;
@@ -106,10 +135,9 @@ export async function runLiquidatorOnce(): Promise<void> {
       continue;
     }
 
-    // JLP grace period: must be unhealthy for ≥2 hours before liquidation
-    // TODO: detect collateral type from position data when multi-collateral is on-chain
+    // Determine collateral type from position mint
     const posKey = pubkey.toBase58();
-    const collateralType = "SOL" as const; // Phase 3: will read from position
+    const collateralType = resolveCollateralType(data.collateralMint, config);
     if (requiresGracePeriod(collateralType)) {
       const now = Date.now();
       if (!unhealthySince.has(posKey)) {
@@ -131,8 +159,12 @@ export async function runLiquidatorOnce(): Promise<void> {
       "liquidatable — sending tx"
     );
 
-    const liquidatorSolAta = getAssociatedTokenAddressSync(config.solMint, liquidator.publicKey);
-    const feeRecipientSolAta = getAssociatedTokenAddressSync(config.solMint, config.feeRecipient);
+    // Resolve vault + ATAs based on collateral type
+    const { vault, mint, msolFeed, collateralPrice } = resolveCollateralVaultAndPrice(
+      collateralType, config, price6dp,
+    );
+    const liquidatorCollateralAta = getAssociatedTokenAddressSync(mint, liquidator.publicKey);
+    const feeRecipientCollateralAta = getAssociatedTokenAddressSync(mint, config.feeRecipient);
 
     // Build Kamino repay CPI data for debt repayment on liquidation
     let kaminoRepayData: Buffer | undefined;
@@ -152,12 +184,14 @@ export async function runLiquidatorOnce(): Promise<void> {
     const ix = buildLiquidateIx({
       liquidator: liquidator.publicKey,
       positionOwner: data.owner,
-      solVault: config.solVault,
-      liquidatorSolAccount: liquidatorSolAta,
-      feeRecipientSolAccount: feeRecipientSolAta,
+      collateralVault: vault,
+      liquidatorCollateralAccount: liquidatorCollateralAta,
+      feeRecipientCollateralAccount: feeRecipientCollateralAta,
       pythPriceFeed: config.pythSolFeed,
       kaminoRepayData,
       kaminoRemainingAccounts,
+      collateralPrice,
+      msolFeedAccount: msolFeed,
     });
 
     const tx = new Transaction().add(

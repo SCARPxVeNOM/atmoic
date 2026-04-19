@@ -10,10 +10,10 @@ use crate::state::{Position, Side};
 use crate::errors::AtomicPerpsError;
 use crate::constants::*;
 use crate::ensure;
-use crate::utils::oracle::validate_and_get_price;
+use crate::utils::oracle::{validate_and_get_price, validate_jlp_price};
 use crate::utils::math::{
-    apply_fee, calculate_health_factor, calculate_min_spread, calculate_position_size,
-    check_vault_skew, token_to_usd,
+    apply_fee, apply_haircut, calculate_health_factor, calculate_min_spread,
+    calculate_position_size, check_vault_skew, token_to_usd,
 };
 use crate::utils::token::{spl_transfer, spl_transfer_signed};
 use crate::utils::account::{create_pda_account, load_config, save_config, save_position};
@@ -32,6 +32,9 @@ pub struct AtomicOpenParams {
     pub spread_fee_bps: u16,
     pub jupiter_swap_data: Vec<u8>,
     pub kamino_borrow_data: Vec<u8>,
+    // V3: multi-collateral fields (backward-compatible — default SOL)
+    pub collateral_type: u8,    // 0=SOL, 1=JLP, 2=mSOL
+    pub jlp_price_6dp: u64,     // only meaningful when collateral_type=1
 }
 
 impl AtomicOpenParams {
@@ -60,8 +63,13 @@ impl AtomicOpenParams {
         if o + 4 > data.len() { return None; }
         let klen = u32::from_le_bytes(data[o..o+4].try_into().unwrap()) as usize; o += 4;
         if o + klen > data.len() { return None; }
-        let kamino_borrow_data = data[o..o+klen].to_vec();
-        Some(Self { collateral_amount, borrow_amount, perp_side, leverage_bps, hedge_amount, spread_fee_bps, jupiter_swap_data, kamino_borrow_data })
+        let kamino_borrow_data = data[o..o+klen].to_vec(); o += klen;
+
+        // V3 extension: collateral_type(1) + jlp_price_6dp(8) — default 0 if absent
+        let collateral_type = if o < data.len() { let v = data[o]; o += 1; v } else { 0 };
+        let jlp_price_6dp = if o + 8 <= data.len() { u(data, &mut o) } else { 0 };
+
+        Some(Self { collateral_amount, borrow_amount, perp_side, leverage_bps, hedge_amount, spread_fee_bps, jupiter_swap_data, kamino_borrow_data, collateral_type, jlp_price_6dp })
     }
 }
 
@@ -78,8 +86,8 @@ pub fn process(
     let global_config_ai = next_account_info(iter)?;
     let position_ai = next_account_info(iter)?;
     let pyth_price_feed = next_account_info(iter)?;
-    let user_sol_account = next_account_info(iter)?;
-    let sol_vault = next_account_info(iter)?;
+    let user_collateral_account = next_account_info(iter)?;  // index 4
+    let collateral_vault = next_account_info(iter)?;          // index 5
     let usdc_reserve = next_account_info(iter)?;
     let user_usdc_account = next_account_info(iter)?;
     let fee_recipient_account = next_account_info(iter)?;
@@ -113,20 +121,81 @@ pub fn process(
     ensure!(params.hedge_amount <= params.borrow_amount, AtomicPerpsError::InsufficientCollateral);
 
     ensure!(is_allowed_feed(pyth_price_feed.key), AtomicPerpsError::InvalidOracleFeed);
-    ensure!(*sol_vault.key == config.sol_vault, AtomicPerpsError::BadInput);
     ensure!(*usdc_reserve.key == config.usdc_reserve, AtomicPerpsError::BadInput);
 
-    // -------- 1b. Dynamic spread check (M-2) — rejects if skew >90% --------
+    // -------- 1a. Determine collateral config from collateral_type --------
+    let (coll_mint, coll_decimals, haircut_bps, expected_vault, is_correlated) = match params.collateral_type {
+        0 => (config.sol_mint, SOL_DECIMALS, HAIRCUT_SOL_BPS, config.sol_vault, false),
+        1 => {
+            ensure!(config.jlp_vault != Pubkey::default(), AtomicPerpsError::BadInput);
+            (config.jlp_mint, JLP_DECIMALS, HAIRCUT_JLP_BPS, config.jlp_vault, true)
+        }
+        2 => {
+            ensure!(config.msol_vault != Pubkey::default(), AtomicPerpsError::BadInput);
+            (config.msol_mint, MSOL_DECIMALS, HAIRCUT_MSOL_BPS, config.msol_vault, true)
+        }
+        _ => return Err(AtomicPerpsError::InvalidCollateralMint.into()),
+    };
+
+    // Validate collateral vault matches config
+    ensure!(*collateral_vault.key == expected_vault, AtomicPerpsError::BadInput);
+
+    // -------- 1b. Stress check — block correlated collateral during stress --------
+    if config.stress_active && is_correlated {
+        crate::events::emit_stress_triggered(user.key, params.collateral_type);
+        return Err(AtomicPerpsError::StressActive.into());
+    }
+
+    // -------- 1c. Dynamic spread check (M-2) — rejects if skew >90% --------
     check_vault_skew(config.total_long_oi, config.total_short_oi)?;
 
-    // -------- 1c. Spread fee enforcement — caller must pay at least the min spread --------
+    // -------- 1d. Spread fee enforcement — caller must pay at least the min spread --------
     let min_spread = calculate_min_spread(config.total_long_oi, config.total_short_oi);
     ensure!(params.spread_fee_bps >= min_spread, AtomicPerpsError::BadInput);
 
     // -------- 2. Oracle --------
-    let (sol_price_6dp, _conf) = validate_and_get_price(pyth_price_feed, &Clock::get()?)?;
+    let clock = Clock::get()?;
+    let (sol_price_6dp, _conf) = validate_and_get_price(pyth_price_feed, &clock)?;
 
-    let collateral_usd = token_to_usd(params.collateral_amount, sol_price_6dp, SOL_DECIMALS)?;
+    // Get collateral price (may differ from SOL for JLP/mSOL)
+    let mut extra_remaining_offset: usize = 0;
+    let collateral_price_6dp = match params.collateral_type {
+        0 => sol_price_6dp,
+        1 => {
+            // JLP: price passed in instruction data, validated against SOL bounds
+            validate_jlp_price(params.jlp_price_6dp, sol_price_6dp)?;
+            params.jlp_price_6dp
+        }
+        2 => {
+            // mSOL: read from Pyth mSOL feed in remaining_accounts[0]
+            ensure!(!remaining_accounts.is_empty(), AtomicPerpsError::BadInput);
+            let msol_feed = &remaining_accounts[0];
+            ensure!(*msol_feed.key == config.pyth_msol_feed, AtomicPerpsError::InvalidOracleFeed);
+            extra_remaining_offset = 1;
+            let (msol_price, _) = crate::utils::oracle::validate_and_get_price_for_feed(
+                msol_feed, &clock, &PYTH_MSOL_USD_FEED_ID,
+            )?;
+            msol_price
+        }
+        _ => unreachable!(),
+    };
+
+    // Apply haircut to collateral value
+    let raw_collateral_usd = token_to_usd(params.collateral_amount, collateral_price_6dp, coll_decimals)?;
+    let collateral_usd = apply_haircut(raw_collateral_usd, haircut_bps)?;
+
+    // -------- 2b. Correlated cap check --------
+    if is_correlated {
+        let new_corr = config.total_correlated_collateral.saturating_add(raw_collateral_usd);
+        let new_total = config.total_collateral.saturating_add(raw_collateral_usd);
+        if new_total > 0 {
+            let corr_pct_bps = crate::utils::math::checked_mul_div(new_corr, BPS_DENOMINATOR, new_total)?;
+            if corr_pct_bps > CORRELATED_CAP_BPS {
+                crate::events::emit_correlated_cap_hit(user.key, corr_pct_bps, CORRELATED_CAP_BPS);
+                return Err(AtomicPerpsError::CorrelatedCapExceeded.into());
+            }
+        }
+    }
 
     let implied_leverage_bps = crate::utils::math::checked_mul_div(
         params.borrow_amount, 1_000, collateral_usd.max(1),
@@ -157,8 +226,8 @@ pub fn process(
         crate::events::emit_psf_low(config.psf_balance, min_psf);
     }
 
-    // -------- 4. Collateral: user -> sol_vault --------
-    spl_transfer(token_program, user_sol_account, sol_vault, user, params.collateral_amount)?;
+    // -------- 4. Collateral: user -> collateral_vault --------
+    spl_transfer(token_program, user_collateral_account, collateral_vault, user, params.collateral_amount)?;
 
     // -------- 5. Fee + borrow --------
     let total_fee_bps = config.protocol_fee_bps.saturating_add(params.spread_fee_bps as u64);
@@ -170,24 +239,31 @@ pub fn process(
 
     spl_transfer_signed(token_program, usdc_reserve, user_usdc_account, program_authority, user_recv_amount, signer_seeds)?;
 
-    if fee_amount > 0 {
-        spl_transfer_signed(token_program, usdc_reserve, fee_recipient_account, program_authority, fee_amount, signer_seeds)?;
+    // PSF accrual: 10% of fee stays in reserve, 90% to fee_recipient (F-02 R-3)
+    let psf_portion = fee_amount / 10;
+    let recipient_fee = fee_amount.saturating_sub(psf_portion);
+
+    if recipient_fee > 0 {
+        spl_transfer_signed(token_program, usdc_reserve, fee_recipient_account, program_authority, recipient_fee, signer_seeds)?;
     }
+    config.psf_balance = config.psf_balance.saturating_add(psf_portion);
 
     // -------- 6. Optional Kamino CPI --------
+    let cpi_remaining = &remaining_accounts[extra_remaining_offset..];
+    #[allow(unused_mut)]
     let mut kamino_acct_count: usize = 0;
     #[cfg(feature = "kamino-cpi")]
     if !params.kamino_borrow_data.is_empty() {
-        ensure!(remaining_accounts.len() >= 2, AtomicPerpsError::BadInput);
-        let kamino_program = &remaining_accounts[0];
-        let borrow_accounts = &remaining_accounts[1..];
+        ensure!(cpi_remaining.len() >= 2, AtomicPerpsError::BadInput);
+        let kamino_program = &cpi_remaining[0];
+        let borrow_accounts = &cpi_remaining[1..];
         kamino_acct_count = 1 + borrow_accounts.len();
         cpi_borrow(kamino_program, borrow_accounts, &params.kamino_borrow_data)?;
     }
 
     // -------- 7. Optional Jupiter hedge (runs AFTER kamino, not exclusive) --------
     if params.hedge_amount > 0 && !params.jupiter_swap_data.is_empty() {
-        let jupiter_accounts = &remaining_accounts[kamino_acct_count..];
+        let jupiter_accounts = &cpi_remaining[kamino_acct_count..];
         ensure!(jupiter_accounts.len() >= 2, AtomicPerpsError::BadInput);
         let jupiter_program = &jupiter_accounts[0];
         let swap_accounts = &jupiter_accounts[1..];
@@ -212,8 +288,7 @@ pub fn process(
     let position = Position {
         owner: user_key,
         perp_market: *pyth_price_feed.key,
-        collateral_mint: config.sol_mint,
-        // Phase 1: reserved for Kamino obligation PDA tracking
+        collateral_mint: coll_mint,
         kamino_obligation: Pubkey::default(),
         collateral_amount: params.collateral_amount,
         borrow_amount_usdc: params.borrow_amount,
@@ -222,12 +297,16 @@ pub fn process(
         entry_price: sol_price_6dp,
         opened_at: now,
         hedge_amount: params.hedge_amount,
+        collateral_entry_price: collateral_price_6dp,
         is_open: true,
         bump: position_bump,
     };
 
     // -------- 9. Post-state health check --------
-    let post_collateral_usd = token_to_usd(position.collateral_amount, sol_price_6dp, SOL_DECIMALS)?;
+    let post_collateral_usd = apply_haircut(
+        token_to_usd(position.collateral_amount, collateral_price_6dp, coll_decimals)?,
+        haircut_bps,
+    )?;
     let health = calculate_health_factor(
         post_collateral_usd,
         position.borrow_amount_usdc,
@@ -247,6 +326,13 @@ pub fn process(
             config.total_short_oi = config.total_short_oi.saturating_add(perp_size);
         }
     }
+
+    // Update collateral tracking
+    config.total_collateral = config.total_collateral.saturating_add(raw_collateral_usd);
+    if is_correlated {
+        config.total_correlated_collateral = config.total_correlated_collateral.saturating_add(raw_collateral_usd);
+    }
+
     save_config(global_config_ai, &config)?;
 
     emit_position_opened(

@@ -86,3 +86,20 @@ pub fn emit_psf_low(psf_balance: u64, threshold: u64) {
     buf[16..24].copy_from_slice(&threshold.to_le_bytes());
     sol_log_data(&[&buf]);
 }
+
+pub fn emit_stress_triggered(owner: &Pubkey, collateral_type: u8) {
+    let mut buf = [0u8; 41];
+    buf[0..8].copy_from_slice(b"STRESBLK");
+    buf[8..40].copy_from_slice(owner.as_ref());
+    buf[40] = collateral_type;
+    sol_log_data(&[&buf]);
+}
+
+pub fn emit_correlated_cap_hit(owner: &Pubkey, current_pct_bps: u64, cap_bps: u64) {
+    let mut buf = [0u8; 56];
+    buf[0..8].copy_from_slice(b"CORRCAP_");
+    buf[8..40].copy_from_slice(owner.as_ref());
+    buf[40..48].copy_from_slice(&current_pct_bps.to_le_bytes());
+    buf[48..56].copy_from_slice(&cap_bps.to_le_bytes());
+    sol_log_data(&[&buf]);
+}

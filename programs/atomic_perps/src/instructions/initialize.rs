@@ -120,6 +120,14 @@ pub fn process(
         total_long_oi: 0,
         total_short_oi: 0,
         psf_balance: 0,
+        jlp_mint: Pubkey::default(),
+        jlp_vault: Pubkey::default(),
+        msol_mint: Pubkey::default(),
+        msol_vault: Pubkey::default(),
+        pyth_msol_feed: Pubkey::default(),
+        stress_active: false,
+        total_correlated_collateral: 0,
+        total_collateral: 0,
     };
     save_config(global_config, &cfg)?;
 

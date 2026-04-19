@@ -93,6 +93,7 @@ async function tick() {
             authority: authority.publicKey,
             isPaused: false,
             maxLeverage: 100_000, // restore 10x
+            stressActive: false,  // V3: unblock correlated collateral
           });
           const tx = new Transaction().add(
             ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
@@ -134,6 +135,7 @@ async function tick() {
           authority: authority.publicKey,
           isPaused: true,
           maxLeverage: 50_000, // 5x during circuit breaker
+          stressActive: true,  // V3: block correlated collateral
         });
         const tx = new Transaction().add(
           ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),

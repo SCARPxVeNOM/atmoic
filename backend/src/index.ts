@@ -4,6 +4,7 @@ import { startApi } from "./services/api";
 import { startCircuitBreaker } from "./services/circuit-breaker";
 import { startDepMonitor } from "./services/dep-monitor";
 import { startFundingCollector } from "./lib/funding";
+import { startMsolMonitor } from "./services/msol-monitor";
 
 const log = pino({ transport: { target: "pino-pretty" } } as any);
 
@@ -17,6 +18,7 @@ async function main() {
     startLiquidator(),
     startCircuitBreaker(),
     startDepMonitor(),
+    startMsolMonitor(),
   ]);
 }
 

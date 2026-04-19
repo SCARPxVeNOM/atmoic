@@ -2,7 +2,12 @@ use solana_program::program_error::ProgramError;
 use crate::errors::AtomicPerpsError;
 use crate::ensure;
 use crate::state::Side;
-use crate::constants::{BPS_DENOMINATOR, MIN_SPREAD_BPS};
+use crate::constants::{
+    BPS_DENOMINATOR, MIN_SPREAD_BPS, SOL_DECIMALS, MSOL_DECIMALS, JLP_DECIMALS,
+    HAIRCUT_SOL_BPS, HAIRCUT_MSOL_BPS, HAIRCUT_JLP_BPS,
+};
+use solana_program::pubkey::Pubkey;
+use crate::constants::{MSOL_MINT, JLP_MINT};
 
 pub fn checked_mul_div(a: u64, b: u64, c: u64) -> Result<u64, ProgramError> {
     ensure!(c > 0, AtomicPerpsError::MathOverflow);
@@ -80,6 +85,37 @@ pub fn calculate_min_spread(long_oi: u64, short_oi: u64) -> u16 {
     }
 }
 
+/// Apply haircut to a USD value. Returns value * (10000 - haircut_bps) / 10000.
+pub fn apply_haircut(value_usd: u64, haircut_bps: u64) -> Result<u64, ProgramError> {
+    let effective = BPS_DENOMINATOR
+        .checked_sub(haircut_bps)
+        .ok_or(AtomicPerpsError::MathOverflow)?;
+    checked_mul_div(value_usd, effective, BPS_DENOMINATOR)
+}
+
+/// Return the haircut in BPS for a given collateral mint.
+pub fn get_haircut_for_mint(mint: &Pubkey) -> u64 {
+    if *mint == MSOL_MINT {
+        HAIRCUT_MSOL_BPS
+    } else if *mint == JLP_MINT {
+        HAIRCUT_JLP_BPS
+    } else {
+        // Default: SOL (or any other supported mint)
+        HAIRCUT_SOL_BPS
+    }
+}
+
+/// Return the token decimals for a given collateral mint.
+pub fn get_decimals_for_mint(mint: &Pubkey) -> u8 {
+    if *mint == MSOL_MINT {
+        MSOL_DECIMALS
+    } else if *mint == JLP_MINT {
+        JLP_DECIMALS
+    } else {
+        SOL_DECIMALS
+    }
+}
+
 /// Dynamic spread check — rejects fills if vault skew > 90%.
 pub fn check_vault_skew(long_oi: u64, short_oi: u64) -> Result<(), ProgramError> {
     let total = long_oi.saturating_add(short_oi);
@@ -126,6 +162,49 @@ mod tests {
     fn test_token_to_usd() {
         let usd = token_to_usd(10_000_000_000, 150_000_000, 9).unwrap();
         assert_eq!(usd, 1_500_000_000);
+    }
+
+    #[test]
+    fn test_apply_haircut_zero() {
+        // 0% haircut → full value
+        assert_eq!(apply_haircut(1_000_000, 0).unwrap(), 1_000_000);
+    }
+
+    #[test]
+    fn test_apply_haircut_25pct() {
+        // 25% haircut (2500 bps) on $100 → $75
+        assert_eq!(apply_haircut(100_000_000, 2_500).unwrap(), 75_000_000);
+    }
+
+    #[test]
+    fn test_apply_haircut_100pct() {
+        // 100% haircut → 0
+        assert_eq!(apply_haircut(1_000_000, 10_000).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_apply_haircut_sol() {
+        // SOL: 10% haircut (1000 bps) on $150 → $135
+        assert_eq!(apply_haircut(150_000_000, 1_000).unwrap(), 135_000_000);
+    }
+
+    #[test]
+    fn test_get_haircut_for_mint() {
+        use solana_program::pubkey::Pubkey;
+        use crate::constants::{MSOL_MINT, JLP_MINT};
+        assert_eq!(get_haircut_for_mint(&MSOL_MINT), 1_800);
+        assert_eq!(get_haircut_for_mint(&JLP_MINT), 2_500);
+        // Unknown mint → SOL default
+        assert_eq!(get_haircut_for_mint(&Pubkey::default()), 1_000);
+    }
+
+    #[test]
+    fn test_get_decimals_for_mint() {
+        use solana_program::pubkey::Pubkey;
+        use crate::constants::{MSOL_MINT, JLP_MINT};
+        assert_eq!(get_decimals_for_mint(&MSOL_MINT), 9);
+        assert_eq!(get_decimals_for_mint(&JLP_MINT), 6);
+        assert_eq!(get_decimals_for_mint(&Pubkey::default()), 9);
     }
 
     #[test]
@@ -192,6 +271,16 @@ mod proptests {
         ) {
             let _ = token_to_usd(amount, price, 9);
             let _ = token_to_usd(amount, price, 6);
+        }
+
+        #[test]
+        fn apply_haircut_result_le_input(
+            value in 0u64..=1_000_000_000_000u64,
+            haircut in 0u64..=10_000u64,
+        ) {
+            if let Ok(result) = apply_haircut(value, haircut) {
+                prop_assert!(result <= value);
+            }
         }
 
         #[test]

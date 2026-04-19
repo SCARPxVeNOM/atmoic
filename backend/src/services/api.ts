@@ -41,6 +41,10 @@ import { liquidatorStats } from "./liquidator";
 import { compute8hTwap, computeFundingRate, getFundingHistory } from "../lib/funding";
 import { breakerState } from "./circuit-breaker";
 import { crankStats } from "./crank";
+import { fetchJlpPrice } from "../lib/jlp";
+import { CollateralType } from "../lib/haircuts";
+import { checkCollateralCap, CollateralTotals } from "../lib/collateral-caps";
+import { msolState } from "./msol-monitor";
 
 const log = pino({ transport: { target: "pino-pretty" } } as any);
 
@@ -178,10 +182,13 @@ app.post("/build-tx/open", async (req, res) => {
       hedgeAmount = "0",
       useKamino = false,
       market = "SOL-PERP",
+      collateralType = "SOL",   // "SOL" | "JLP" | "mSOL"
     } = req.body ?? {};
     if (!wallet || !collateralAmount || !borrowAmount || !side || !leverageBps) {
       return res.status(400).json({ error: "missing required field" });
     }
+    const collType = collateralType as CollateralType;
+    const collTypeNum = collType === "JLP" ? 1 : collType === "mSOL" ? 2 : 0;
 
     // Look up market for oracle feed selection
     const marketInfo = getMarket(market);
@@ -226,7 +233,55 @@ app.post("/build-tx/open", async (req, res) => {
     // Spread fee is enforced on-chain — pass raw borrow + spread bps as ix param.
     const rawBorrow = BigInt(borrowAmount);
 
-    const userSolAccount = getAssociatedTokenAddressSync(config.solMint, user);
+    // Resolve collateral vault, mint, and price based on collateral type
+    let collateralMint: PublicKey;
+    let collateralVault: PublicKey;
+    let jlpPrice: bigint | undefined;
+    let msolFeedAccount: PublicKey | undefined;
+
+    if (collType === "JLP") {
+      collateralMint = config.jlpMint;
+      collateralVault = config.jlpVault;
+      // Fetch live JLP virtual price from Jupiter pool
+      const jlp = await fetchJlpPrice();
+      jlpPrice = jlp.virtualPrice6dp;
+    } else if (collType === "mSOL") {
+      collateralMint = config.msolMint;
+      collateralVault = config.msolVault;
+      msolFeedAccount = config.pythMsolFeed;
+      // Block mSOL deposits if depeg detected
+      if (msolState.depositsBlocked) {
+        return res.status(503).json({
+          error: "msol_deposits_blocked",
+          message: "mSOL deposits blocked — depeg or circuit breaker active",
+        });
+      }
+    } else {
+      collateralMint = config.solMint;
+      collateralVault = config.solVault;
+    }
+
+    // Collateral cap check for yield-bearing assets (JLP/mSOL)
+    if (collType === "JLP" || collType === "mSOL") {
+      const totals: CollateralTotals = {
+        USDC: 0n,
+        SOL: config.totalCollateral - config.totalCorrelatedCollateral,
+        mSOL: collType === "mSOL" ? config.totalCorrelatedCollateral : 0n,
+        JLP: collType === "JLP" ? config.totalCorrelatedCollateral : 0n,
+        RAY_LP: 0n,
+      };
+      const capCheck = checkCollateralCap(collType, BigInt(collateralAmount), totals);
+      if (!capCheck.allowed) {
+        return res.status(400).json({
+          error: "collateral_cap_exceeded",
+          message: capCheck.reason,
+          currentYieldPct: capCheck.currentYieldPct,
+          afterYieldPct: capCheck.afterYieldPct,
+        });
+      }
+    }
+
+    const userCollateralAccount = getAssociatedTokenAddressSync(collateralMint, user);
     const userUsdcAccount = getAssociatedTokenAddressSync(config.usdcMint, user);
     const feeRecipientAccount = getAssociatedTokenAddressSync(
       config.usdcMint,
@@ -270,9 +325,9 @@ app.post("/build-tx/open", async (req, res) => {
 
     const ix = buildAtomicOpenIx({
       user,
-      userSolAccount,
+      userCollateralAccount,
       userUsdcAccount,
-      solVault: config.solVault,
+      collateralVault,
       usdcReserve: config.usdcReserve,
       feeRecipientAccount,
       pythPriceFeed: marketFeed,
@@ -286,6 +341,9 @@ app.post("/build-tx/open", async (req, res) => {
       jupiterRemainingAccounts,
       kaminoBorrowData,
       kaminoRemainingAccounts,
+      collateralType: collTypeNum,
+      jlpPrice,
+      msolFeedAccount,
     });
 
     // Account preflight check (F-01 R-4): fail if >32 unique accounts
@@ -337,26 +395,49 @@ app.post("/build-tx/close", async (req, res) => {
     const user = new PublicKey(wallet);
     const config = await loadConfig();
 
-    const userSolAccount = getAssociatedTokenAddressSync(config.solMint, user);
+    // Look up position to determine collateral type and borrow amount
+    const [positionPda] = findPositionPda(user);
+    const posAcct = await connection.getAccountInfo(positionPda);
+    if (!posAcct) return res.status(404).json({ error: "no position" });
+    const position = decodePosition(posAcct.data);
+
+    // Resolve collateral type from position's mint
+    const JLP_MINT_STR = "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4";
+    const MSOL_MINT_STR = "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So";
+    const posMintStr = position.collateralMint.toBase58();
+    let closeCollateralVault: PublicKey;
+    let closeCollateralMint: PublicKey;
+    let closeCollateralPrice: bigint | undefined;
+    let closeMsolFeedAccount: PublicKey | undefined;
+
+    if (posMintStr === JLP_MINT_STR || position.collateralMint.equals(config.jlpMint)) {
+      closeCollateralMint = config.jlpMint;
+      closeCollateralVault = config.jlpVault;
+      const jlp = await fetchJlpPrice();
+      closeCollateralPrice = jlp.virtualPrice6dp;
+    } else if (posMintStr === MSOL_MINT_STR || position.collateralMint.equals(config.msolMint)) {
+      closeCollateralMint = config.msolMint;
+      closeCollateralVault = config.msolVault;
+      closeMsolFeedAccount = config.pythMsolFeed;
+    } else {
+      closeCollateralMint = config.solMint;
+      closeCollateralVault = config.solVault;
+    }
+
+    const userCollateralAccount = getAssociatedTokenAddressSync(closeCollateralMint, user);
     const userUsdcAccount = getAssociatedTokenAddressSync(config.usdcMint, user);
     const feeRecipientAccount = getAssociatedTokenAddressSync(
       config.usdcMint,
       config.feeRecipient
     );
 
-    // Build Kamino repay ixs if requested. Need borrow amount for repay amount.
+    // Build Kamino repay ixs if requested.
     let kaminoRepayData: Buffer = Buffer.alloc(0);
     let kaminoRemainingAccounts: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[] = [];
     let kaminoSetupIxs: any[] = [];
     let kaminoCleanupIxs: any[] = [];
 
     if (useKamino) {
-      // Look up the position to know how much to repay.
-      const [positionPda] = findPositionPda(user);
-      const posAcct = await connection.getAccountInfo(positionPda);
-      if (!posAcct) return res.status(404).json({ error: "no position" });
-      const position = decodePosition(posAcct.data);
-
       const kamino = await buildKaminoRepay(user, config.usdcMint, position.borrowAmountUsdc);
       const extracted = extractIxForCpi(kamino.lendingIx);
       kaminoRepayData = extracted.data;
@@ -370,14 +451,16 @@ app.post("/build-tx/close", async (req, res) => {
 
     const ix = buildAtomicCloseIx({
       user,
-      userSolAccount,
+      userCollateralAccount,
       userUsdcAccount,
-      solVault: config.solVault,
+      collateralVault: closeCollateralVault,
       usdcReserve: config.usdcReserve,
       feeRecipientAccount,
       pythPriceFeed: config.pythSolFeed,
       kaminoRepayData,
       kaminoRemainingAccounts,
+      collateralPrice: closeCollateralPrice,
+      msolFeedAccount: closeMsolFeedAccount,
     });
 
     // Account preflight check (F-01 R-4)
@@ -567,6 +650,10 @@ app.post("/build-tx/cancel-order", async (req, res) => {
 
 app.get("/circuit-breaker", (_req, res) => {
   res.json(breakerState);
+});
+
+app.get("/msol/status", (_req, res) => {
+  res.json(msolState);
 });
 
 app.get("/crank/status", (_req, res) => {

@@ -25,6 +25,10 @@ pub enum AtomicPerpsError {
     HashMismatch = 6019,
     OrderNotFound = 6020,
     NoBidsOrAsks = 6021,
+    StressActive = 6022,
+    CorrelatedCapExceeded = 6023,
+    JlpPriceOutOfRange = 6024,
+    LiquidationGracePeriod = 6025,
 }
 
 impl From<AtomicPerpsError> for ProgramError {

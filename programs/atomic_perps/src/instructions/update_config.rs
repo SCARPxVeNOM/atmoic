@@ -64,6 +64,12 @@ pub fn process(
         if new_psf != NO_CHANGE_U64 { config.psf_balance = new_psf; }
     }
 
+    // Optional: stress_active (V3 field — offset 113, u8, 255 = no change)
+    if data.len() >= 114 {
+        let new_stress = data[113];
+        if new_stress != 255 { config.stress_active = new_stress != 0; }
+    }
+
     save_config(global_config_ai, &config)?;
     Ok(())
 }

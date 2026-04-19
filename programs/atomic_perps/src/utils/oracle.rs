@@ -9,6 +9,7 @@ use crate::errors::AtomicPerpsError;
 use crate::ensure;
 #[cfg(not(feature = "mock-oracle"))]
 use crate::constants::{MAX_ORACLE_AGE_SECONDS, MAX_ORACLE_CONFIDENCE_BPS, PYTH_SOL_USD_FEED_ID};
+use crate::constants::JLP_PRICE_SANITY_FACTOR;
 
 #[cfg(not(feature = "mock-oracle"))]
 const DISCRIMINATOR: usize = 8;
@@ -23,6 +24,22 @@ const FEED_ID_OFFSET_FULL: usize = DISCRIMINATOR + WRITE_AUTHORITY + 1;
 pub fn validate_and_get_price(
     pyth_feed_account: &AccountInfo,
     _clock: &Clock,
+) -> Result<(u64, u64), ProgramError> {
+    mock_read_price(pyth_feed_account)
+}
+
+#[cfg(feature = "mock-oracle")]
+pub fn validate_and_get_price_for_feed(
+    pyth_feed_account: &AccountInfo,
+    _clock: &Clock,
+    _expected_feed_id: &[u8; 32],
+) -> Result<(u64, u64), ProgramError> {
+    mock_read_price(pyth_feed_account)
+}
+
+#[cfg(feature = "mock-oracle")]
+fn mock_read_price(
+    pyth_feed_account: &AccountInfo,
 ) -> Result<(u64, u64), ProgramError> {
     // Variable mock: if account has >=16 bytes of data, read price + conf from it.
     // This lets tests write a custom price to an account and pass it as oracle.
@@ -43,6 +60,15 @@ pub fn validate_and_get_price(
     pyth_feed_account: &AccountInfo,
     clock: &Clock,
 ) -> Result<(u64, u64), ProgramError> {
+    validate_and_get_price_for_feed(pyth_feed_account, clock, &PYTH_SOL_USD_FEED_ID)
+}
+
+#[cfg(not(feature = "mock-oracle"))]
+pub fn validate_and_get_price_for_feed(
+    pyth_feed_account: &AccountInfo,
+    clock: &Clock,
+    expected_feed_id: &[u8; 32],
+) -> Result<(u64, u64), ProgramError> {
     let data = pyth_feed_account.try_borrow_data()?;
     ensure!(data.len() >= 150, AtomicPerpsError::InvalidOracleFeed);
 
@@ -57,7 +83,7 @@ pub fn validate_and_get_price(
     ensure!(data.len() >= msg_end, AtomicPerpsError::InvalidOracleFeed);
 
     let feed_id: &[u8] = &data[feed_off..feed_off + 32];
-    ensure!(feed_id == PYTH_SOL_USD_FEED_ID, AtomicPerpsError::InvalidOracleFeed);
+    ensure!(feed_id == expected_feed_id, AtomicPerpsError::InvalidOracleFeed);
 
     let price_off = feed_off + 32;
     let conf_off = price_off + 8;
@@ -92,5 +118,20 @@ fn normalize_to_6dp(value: u64, exponent: i32) -> Result<u64, ProgramError> {
         let f = 10u64.checked_pow((-shift) as u32).ok_or(AtomicPerpsError::MathOverflow)?;
         Ok(value / f)
     }
+}
+
+/// Validate JLP price (passed as instruction data) against SOL price sanity bounds.
+/// JLP has no Pyth feed — caller supplies the Jupiter pool virtual price.
+/// Sanity check: jlp_price must be within [sol_price / FACTOR, sol_price * FACTOR].
+pub fn validate_jlp_price(jlp_price_6dp: u64, sol_price_6dp: u64) -> Result<(), ProgramError> {
+    if jlp_price_6dp == 0 || sol_price_6dp == 0 {
+        return Err(AtomicPerpsError::JlpPriceOutOfRange.into());
+    }
+    let lower = sol_price_6dp / JLP_PRICE_SANITY_FACTOR;
+    let upper = sol_price_6dp.saturating_mul(JLP_PRICE_SANITY_FACTOR);
+    if jlp_price_6dp < lower || jlp_price_6dp > upper {
+        return Err(AtomicPerpsError::JlpPriceOutOfRange.into());
+    }
+    Ok(())
 }
 

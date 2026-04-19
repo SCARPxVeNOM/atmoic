@@ -291,8 +291,10 @@ pub fn process(
     config.total_long_oi = config.total_long_oi.saturating_add(filled_bid_vol);
     config.total_short_oi = config.total_short_oi.saturating_add(filled_ask_vol);
 
-    // PSF accrual only — spending logic deferred to Phase 2
-    config.psf_balance = config.psf_balance.saturating_add(total_matchable / 10_000);
+    // PSF accrual: 10% of implied protocol fee on matched volume (F-02 R-3)
+    // Fee = volume × protocol_fee_bps / 10_000; PSF = 10% of that
+    let implied_fee = total_matchable.saturating_mul(config.protocol_fee_bps) / BPS_DENOMINATOR;
+    config.psf_balance = config.psf_balance.saturating_add(implied_fee / 10);
 
     save_config(global_config_ai, &config)?;
 

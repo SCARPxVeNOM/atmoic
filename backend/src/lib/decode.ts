@@ -22,6 +22,19 @@ export interface GlobalConfigData {
   totalUsdcReserve: bigint;
   bump: number;
   programAuthorityBump: number;
+  // V2
+  totalLongOi: bigint;
+  totalShortOi: bigint;
+  psfBalance: bigint;
+  // V3
+  jlpMint: PublicKey;
+  jlpVault: PublicKey;
+  msolMint: PublicKey;
+  msolVault: PublicKey;
+  pythMsolFeed: PublicKey;
+  stressActive: boolean;
+  totalCorrelatedCollateral: bigint;
+  totalCollateral: bigint;
 }
 
 export interface PositionData {
@@ -36,6 +49,7 @@ export interface PositionData {
   entryPrice: bigint;
   openedAt: bigint;
   hedgeAmount: bigint;
+  collateralEntryPrice: bigint; // V3
   isOpen: boolean;
   bump: number;
 }
@@ -69,7 +83,10 @@ class Reader {
 
 export function decodeGlobalConfig(data: Buffer): GlobalConfigData {
   const r = new Reader(data);
-  return {
+  const V2_SIZE = 8 + 299;
+  const V3_SIZE = 8 + 476;
+
+  const base = {
     authority: r.pk(),
     feeRecipient: r.pk(),
     pythSolFeed: r.pk(),
@@ -87,12 +104,38 @@ export function decodeGlobalConfig(data: Buffer): GlobalConfigData {
     bump: r.u8(),
     programAuthorityBump: r.u8(),
   };
+
+  // V2 fields
+  const v2 = data.length >= V2_SIZE
+    ? { totalLongOi: r.u64(), totalShortOi: r.u64(), psfBalance: r.u64() }
+    : { totalLongOi: 0n, totalShortOi: 0n, psfBalance: 0n };
+
+  // V3 fields
+  const v3 = data.length >= V3_SIZE
+    ? {
+        jlpMint: r.pk(), jlpVault: r.pk(),
+        msolMint: r.pk(), msolVault: r.pk(),
+        pythMsolFeed: r.pk(),
+        stressActive: r.bool(),
+        totalCorrelatedCollateral: r.u64(),
+        totalCollateral: r.u64(),
+      }
+    : {
+        jlpMint: PublicKey.default, jlpVault: PublicKey.default,
+        msolMint: PublicKey.default, msolVault: PublicKey.default,
+        pythMsolFeed: PublicKey.default,
+        stressActive: false,
+        totalCorrelatedCollateral: 0n,
+        totalCollateral: 0n,
+      };
+
+  return { ...base, ...v2, ...v3 };
 }
 
 export function decodePosition(data: Buffer): PositionData {
   const r = new Reader(data);
-  const V1_SPACE = 8 + 107; // disc + original fields
-  const V2_SPACE = 8 + 179; // disc + new fields
+  const V2_SPACE = 8 + 179;
+  const V3_SPACE = 8 + 187;
   const owner = r.pk();
   const perpMarket = r.pk();
   // V2 fields: collateral_mint + kamino_obligation (64 bytes) inserted here
@@ -110,11 +153,13 @@ export function decodePosition(data: Buffer): PositionData {
   const openedAt = r.i64();
   // V2 field: hedge_amount after opened_at
   const hedgeAmount = data.length >= V2_SPACE ? r.u64() : 0n;
+  // V3 field: collateral_entry_price
+  const collateralEntryPrice = data.length >= V3_SPACE ? r.u64() : 0n;
   const isOpen = r.bool();
   const bump = r.u8();
   return {
     owner, perpMarket, collateralMint, kaminoObligation,
     collateralAmount, borrowAmountUsdc, perpSide, perpSize,
-    entryPrice, openedAt, hedgeAmount, isOpen, bump,
+    entryPrice, openedAt, hedgeAmount, collateralEntryPrice, isOpen, bump,
   };
 }
