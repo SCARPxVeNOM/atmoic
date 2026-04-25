@@ -218,14 +218,18 @@ describe("atomic_perps", () => {
     expect(vaultSolAfter - vaultSolBefore).to.equal(OPEN_COLLATERAL);
 
     // Fee split: protocol (10 bps) + spread (5 bps default) = 15 bps of 100 USDC.
+    // PSF accrual: 10% of fee stays in reserve, 90% goes to fee_recipient.
     const SPREAD_FEE_BPS = 5n;
     const totalFeeBps = BigInt(DEFAULT_PROTOCOL_FEE_BPS) + SPREAD_FEE_BPS;
     const feeAmount = (OPEN_BORROW * totalFeeBps) / 10_000n;
+    const psfPortion = feeAmount / 10n;
+    const recipientFee = feeAmount - psfPortion;
     const userRecv = OPEN_BORROW - feeAmount;
 
     expect(userUsdcAfter - userUsdcBefore).to.equal(userRecv);
-    expect(feeRecipientAfter - feeRecipientBefore).to.equal(feeAmount);
-    expect(reserveBefore - reserveAfter).to.equal(OPEN_BORROW); // reserve paid out full notional
+    expect(feeRecipientAfter - feeRecipientBefore).to.equal(recipientFee);
+    // Reserve outflow = user_recv + recipient_fee = OPEN_BORROW - psfPortion
+    expect(reserveBefore - reserveAfter).to.equal(OPEN_BORROW - psfPortion);
 
     // Global accounting.
     const cfg = decodeGlobalConfig((await connection.getAccountInfo(configPda))!.data);
@@ -306,10 +310,13 @@ describe("atomic_perps", () => {
     // User repaid the full notional borrow.
     expect(userUsdcBefore - userUsdcAfter).to.equal(OPEN_BORROW);
 
-    // Reserve net delta: +borrow (user repay) -fee (close fee paid out).
+    // Reserve net delta: +borrow (user repay) -recipientFee (close fee paid out).
+    // PSF keeps 10% of fee in reserve, 90% goes to fee_recipient.
     const closeFee = (OPEN_BORROW * BigInt(DEFAULT_PROTOCOL_FEE_BPS)) / 10_000n;
-    expect(reserveAfter - reserveBefore).to.equal(OPEN_BORROW - closeFee);
-    expect(feeRecipientAfter - feeRecipientBefore).to.equal(closeFee);
+    const closePsf = closeFee / 10n;
+    const closeRecipientFee = closeFee - closePsf;
+    expect(reserveAfter - reserveBefore).to.equal(OPEN_BORROW - closeRecipientFee);
+    expect(feeRecipientAfter - feeRecipientBefore).to.equal(closeRecipientFee);
 
     // Global accounting reset.
     const cfg = decodeGlobalConfig((await connection.getAccountInfo(configPda))!.data);

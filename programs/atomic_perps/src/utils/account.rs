@@ -18,6 +18,7 @@ pub const ORDER_QUEUE_DISCRIMINATOR: [u8; 8] = [0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0x
 pub const COMMITMENT_DISCRIMINATOR: [u8; 8] = [0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0xD8];
 
 pub fn load_config(ai: &AccountInfo) -> Result<GlobalConfig, ProgramError> {
+    ensure!(ai.owner == &crate::ID, AtomicPerpsError::BadInput);
     let data = ai.try_borrow_data()?;
     ensure!(data.len() >= 8 + GlobalConfig::V1_SPACE, AtomicPerpsError::BadInput);
     ensure!(data[..8] == GLOBAL_CONFIG_DISCRIMINATOR, AtomicPerpsError::BadInput);
@@ -32,6 +33,7 @@ pub fn save_config(ai: &AccountInfo, cfg: &GlobalConfig) -> Result<(), ProgramEr
 }
 
 pub fn load_position(ai: &AccountInfo) -> Result<Position, ProgramError> {
+    ensure!(ai.owner == &crate::ID, AtomicPerpsError::BadInput);
     let data = ai.try_borrow_data()?;
     ensure!(data.len() >= 8 + Position::INIT_SPACE, AtomicPerpsError::BadInput);
     ensure!(data[..8] == POSITION_DISCRIMINATOR, AtomicPerpsError::BadInput);

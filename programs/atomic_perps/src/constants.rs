@@ -11,6 +11,9 @@ pub const JUPITER_PROGRAM_ID: Pubkey =
 pub const SPL_TOKEN_PROGRAM_ID: Pubkey =
     solana_program::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 
+pub const PYTH_PUSH_ORACLE_PROGRAM: Pubkey =
+    solana_program::pubkey!("pythWSnswVUd12oZpeFP8e9CVaEqJg25g1Vtc2biRsT");
+
 // === Pyth Price Feed IDs (mainnet hex) ===
 
 pub const PYTH_SOL_USD_FEED_ID: [u8; 32] = [
@@ -100,7 +103,7 @@ pub const CORRELATED_CAP_BPS: u64 = 3_000; // 30% — JLP+mSOL must be ≤30% of
 // === JLP Risk Parameters ===
 
 pub const JLP_LIQUIDATION_GRACE_SECONDS: i64 = 7_200; // 2 hours
-pub const JLP_PRICE_SANITY_FACTOR: u64 = 5; // JLP price must be within 1/5x–5x of SOL
+pub const JLP_PRICE_SANITY_FACTOR: u64 = 2; // JLP price must be within 1/2x–2x of SOL
 
 // === Pyth mSOL/USD Feed ID (mainnet hex) ===
 

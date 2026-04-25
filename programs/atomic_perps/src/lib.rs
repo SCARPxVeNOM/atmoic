@@ -33,6 +33,10 @@ const DISC_PLACE_ORDER: [u8; 8] = [0x14, 0x3e, 0x08, 0x7e, 0x21, 0xc8, 0x81, 0x9
 const DISC_CANCEL_ORDER:[u8; 8] = [0x5f, 0x81, 0xed, 0xf0, 0x08, 0x31, 0xdf, 0x84];
 #[cfg(feature = "dfba")]
 const DISC_INIT_QUEUE:  [u8; 8] = [0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8];
+#[cfg(feature = "mock-oracle")]
+const DISC_SET_ORACLE:  [u8; 8] = [0x75, 0xb2, 0x05, 0xcd, 0xed, 0x32, 0xff, 0xd5];
+#[cfg(feature = "mock-oracle")]
+const DISC_SET_TEST_CFG:[u8; 8] = [0x1c, 0x22, 0xac, 0xaa, 0x52, 0x8b, 0x7f, 0x99];
 
 pub fn process_instruction(
     program_id: &Pubkey,
@@ -60,6 +64,10 @@ pub fn process_instruction(
         DISC_CANCEL_ORDER => instructions::cancel_order::process(program_id, accounts, data),
         #[cfg(feature = "dfba")]
         DISC_INIT_QUEUE   => instructions::init_queue_shard::process(program_id, accounts, data),
+        #[cfg(feature = "mock-oracle")]
+        DISC_SET_ORACLE   => instructions::set_mock_oracle::process(program_id, accounts, data),
+        #[cfg(feature = "mock-oracle")]
+        DISC_SET_TEST_CFG => instructions::set_test_config::process(program_id, accounts, data),
         _ => Err(ProgramError::InvalidInstructionData),
     }
 }

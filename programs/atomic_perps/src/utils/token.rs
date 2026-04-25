@@ -53,18 +53,21 @@ fn build_transfer_ix(from: &Pubkey, to: &Pubkey, authority: &Pubkey, amount: u64
 }
 
 pub fn read_token_amount(ai: &AccountInfo) -> Result<u64, ProgramError> {
+    ensure!(ai.owner == &SPL_TOKEN_PROGRAM_ID, AtomicPerpsError::InvalidProgramId);
     let data = ai.try_borrow_data()?;
     ensure!(data.len() >= 72, AtomicPerpsError::InvalidCollateralMint);
     Ok(u64::from_le_bytes(data[64..72].try_into().unwrap()))
 }
 
 pub fn read_token_mint(ai: &AccountInfo) -> Result<Pubkey, ProgramError> {
+    ensure!(ai.owner == &SPL_TOKEN_PROGRAM_ID, AtomicPerpsError::InvalidProgramId);
     let data = ai.try_borrow_data()?;
     ensure!(data.len() >= 32, AtomicPerpsError::InvalidCollateralMint);
     Ok(Pubkey::new_from_array(data[0..32].try_into().unwrap()))
 }
 
 pub fn read_token_owner(ai: &AccountInfo) -> Result<Pubkey, ProgramError> {
+    ensure!(ai.owner == &SPL_TOKEN_PROGRAM_ID, AtomicPerpsError::InvalidProgramId);
     let data = ai.try_borrow_data()?;
     ensure!(data.len() >= 64, AtomicPerpsError::InvalidCollateralMint);
     Ok(Pubkey::new_from_array(data[32..64].try_into().unwrap()))

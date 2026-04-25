@@ -8,7 +8,7 @@ use crate::errors::AtomicPerpsError;
 #[cfg(not(feature = "mock-oracle"))]
 use crate::ensure;
 #[cfg(not(feature = "mock-oracle"))]
-use crate::constants::{MAX_ORACLE_AGE_SECONDS, MAX_ORACLE_CONFIDENCE_BPS, PYTH_SOL_USD_FEED_ID};
+use crate::constants::{MAX_ORACLE_AGE_SECONDS, MAX_ORACLE_CONFIDENCE_BPS, PYTH_SOL_USD_FEED_ID, PYTH_PUSH_ORACLE_PROGRAM};
 use crate::constants::JLP_PRICE_SANITY_FACTOR;
 
 #[cfg(not(feature = "mock-oracle"))]
@@ -69,6 +69,7 @@ pub fn validate_and_get_price_for_feed(
     clock: &Clock,
     expected_feed_id: &[u8; 32],
 ) -> Result<(u64, u64), ProgramError> {
+    ensure!(*pyth_feed_account.owner == PYTH_PUSH_ORACLE_PROGRAM, AtomicPerpsError::InvalidOracleFeed);
     let data = pyth_feed_account.try_borrow_data()?;
     ensure!(data.len() >= 150, AtomicPerpsError::InvalidOracleFeed);
 
@@ -133,5 +134,59 @@ pub fn validate_jlp_price(jlp_price_6dp: u64, sol_price_6dp: u64) -> Result<(), 
         return Err(AtomicPerpsError::JlpPriceOutOfRange.into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_jlp_price_in_range() {
+        // $200 JLP with $150 SOL → bounds [75, 300], 200 is in range
+        assert!(validate_jlp_price(200_000_000, 150_000_000).is_ok());
+        // JLP price equals SOL price → always valid
+        assert!(validate_jlp_price(150_000_000, 150_000_000).is_ok());
+    }
+
+    #[test]
+    fn test_validate_jlp_price_lower_bound() {
+        // SOL = $150, factor = 2, lower = 150/2 = $75
+        // $75 exactly → Ok
+        assert!(validate_jlp_price(75_000_000, 150_000_000).is_ok());
+        // $74.999999 → Err (below lower bound)
+        assert!(validate_jlp_price(74_999_999, 150_000_000).is_err());
+    }
+
+    #[test]
+    fn test_validate_jlp_price_upper_bound() {
+        // SOL = $150, factor = 2, upper = 150*2 = $300
+        // $300 exactly → Ok
+        assert!(validate_jlp_price(300_000_000, 150_000_000).is_ok());
+        // $300.000001 → Err (above upper bound)
+        assert!(validate_jlp_price(300_000_001, 150_000_000).is_err());
+    }
+
+    #[test]
+    fn test_validate_jlp_price_zero() {
+        // Zero JLP price → Err
+        assert!(validate_jlp_price(0, 150_000_000).is_err());
+        // Zero SOL price → Err
+        assert!(validate_jlp_price(100_000_000, 0).is_err());
+        // Both zero → Err
+        assert!(validate_jlp_price(0, 0).is_err());
+    }
+
+    #[test]
+    fn test_validate_jlp_price_large_sol() {
+        // Large SOL price — saturating_mul prevents overflow
+        let large_sol = u64::MAX / 10;
+        // upper = large_sol * 2 would overflow, saturating_mul caps at u64::MAX
+        // Any JLP price <= u64::MAX should be in range (upper = u64::MAX)
+        assert!(validate_jlp_price(large_sol, large_sol).is_ok());
+        // Lower bound = large_sol / 2
+        let lower = large_sol / 2;
+        assert!(validate_jlp_price(lower, large_sol).is_ok());
+        assert!(validate_jlp_price(lower - 1, large_sol).is_err());
+    }
 }
 

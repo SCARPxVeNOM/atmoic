@@ -479,11 +479,12 @@ export function decodePosition(data: Buffer): PositionData {
   const entryPrice = readU64();
   const openedAt = readI64();
   const hedgeAmount = data.length >= V2_SIZE ? readU64() : 0n;
+
+  // V3 field — serialized BEFORE isOpen/bump in Rust
+  const collateralEntryPrice = data.length >= V3_SIZE ? readU64() : 0n;
+
   const isOpen = readU8() !== 0;
   const bump = readU8();
-
-  // V3 field
-  const collateralEntryPrice = data.length >= V3_SIZE ? readU64() : 0n;
 
   return {
     owner, perpMarket, collateralMint, kaminoObligation,
@@ -664,6 +665,60 @@ export function buildInitQueueShardIx(args: {
     keys: [
       { pubkey: args.payer, isSigner: true, isWritable: true },
       { pubkey: queueShard, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+}
+
+// ----- set_mock_oracle (test-only, mock-oracle feature) -----
+
+// ----- set_test_config (test-only, mock-oracle feature) -----
+// Seeds OI + collateral tracking fields. u64::MAX = no change.
+
+const NO_CHANGE_U64_BIG = BigInt("18446744073709551615");
+
+export function buildSetTestConfigIx(args: {
+  authority: PublicKey;
+  totalLongOi?: bigint;
+  totalShortOi?: bigint;
+  totalCollateral?: bigint;
+  totalCorrelatedCollateral?: bigint;
+}): TransactionInstruction {
+  const [config] = findConfigPda();
+  const data = Buffer.concat([
+    discriminator("set_test_config"),
+    writeU64LE(args.totalLongOi ?? NO_CHANGE_U64_BIG),
+    writeU64LE(args.totalShortOi ?? NO_CHANGE_U64_BIG),
+    writeU64LE(args.totalCollateral ?? NO_CHANGE_U64_BIG),
+    writeU64LE(args.totalCorrelatedCollateral ?? NO_CHANGE_U64_BIG),
+  ]);
+  return new TransactionInstruction({
+    programId: ATOMIC_PERPS_PROGRAM_ID,
+    keys: [
+      { pubkey: args.authority, isSigner: true, isWritable: true },
+      { pubkey: config, isSigner: false, isWritable: true },
+    ],
+    data,
+  });
+}
+
+export function buildSetMockOracleIx(
+  payer: PublicKey,
+  oracleAccount: PublicKey,
+  price: bigint,
+  confidence: bigint,
+): TransactionInstruction {
+  const data = Buffer.concat([
+    discriminator("set_mock_oracle"),
+    writeU64LE(price),
+    writeU64LE(confidence),
+  ]);
+  return new TransactionInstruction({
+    programId: ATOMIC_PERPS_PROGRAM_ID,
+    keys: [
+      { pubkey: payer, isSigner: true, isWritable: true },
+      { pubkey: oracleAccount, isSigner: true, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data,

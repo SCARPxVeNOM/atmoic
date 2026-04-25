@@ -19,6 +19,7 @@ pub fn process(
     let queue_shard_ai = next_account_info(iter)?;
 
     ensure!(user.is_signer, AtomicPerpsError::Unauthorized);
+    ensure!(queue_shard_ai.owner == &crate::ID, AtomicPerpsError::BadInput);
 
     let mut qdata = queue_shard_ai.try_borrow_mut_data()?;
     ensure!(qdata.len() >= 8 + ORDER_QUEUE_HEADER, AtomicPerpsError::BadInput);

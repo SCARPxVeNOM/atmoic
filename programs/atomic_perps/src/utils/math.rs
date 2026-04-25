@@ -224,6 +224,134 @@ mod tests {
         // 95% skew → u16::MAX (fills suspended by check_vault_skew)
         assert_eq!(calculate_min_spread(195, 5), u16::MAX);
     }
+
+    // ===== New tests: PnL edge cases =====
+
+    #[test]
+    fn test_pnl_short_profit() {
+        // Short profits when price drops: entry $150, exit $120, size 1 SOL
+        let pnl = calculate_pnl(150_000_000, 120_000_000, 1_000_000_000, &Side::Short).unwrap();
+        // pnl = (150-120) * 1_000_000_000 / 150 = 200_000_000
+        assert_eq!(pnl, 200_000_000);
+    }
+
+    #[test]
+    fn test_pnl_long_loss() {
+        // Long loses when price drops: entry $150, exit $120, size 1 SOL
+        let pnl = calculate_pnl(150_000_000, 120_000_000, 1_000_000_000, &Side::Long).unwrap();
+        // pnl = (120-150) * 1_000_000_000 / 150 = -200_000_000
+        assert_eq!(pnl, -200_000_000);
+    }
+
+    #[test]
+    fn test_pnl_short_loss() {
+        // Short loses when price rises: entry $150, exit $180, size 1 SOL
+        let pnl = calculate_pnl(150_000_000, 180_000_000, 1_000_000_000, &Side::Short).unwrap();
+        // pnl = (150-180) * 1_000_000_000 / 150 = -200_000_000
+        assert_eq!(pnl, -200_000_000);
+    }
+
+    #[test]
+    fn test_pnl_zero_entry_price() {
+        // Division by zero returns error (checked_div on zero entry_price)
+        let result = calculate_pnl(0, 100_000_000, 1_000_000_000, &Side::Long);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pnl_same_price() {
+        // Same entry and exit → zero PnL for both sides
+        assert_eq!(calculate_pnl(150_000_000, 150_000_000, 1_000_000_000, &Side::Long).unwrap(), 0);
+        assert_eq!(calculate_pnl(150_000_000, 150_000_000, 1_000_000_000, &Side::Short).unwrap(), 0);
+    }
+
+    // ===== New tests: calculate_position_size =====
+
+    #[test]
+    fn test_calculate_position_size() {
+        // 100 USDC at 5x leverage → 500 position size
+        assert_eq!(calculate_position_size(100_000_000, 5_000).unwrap(), 500_000_000);
+        // 100 USDC at 10x leverage → 1000 position size
+        assert_eq!(calculate_position_size(100_000_000, 10_000).unwrap(), 1_000_000_000);
+        // 0 borrow → 0 size
+        assert_eq!(calculate_position_size(0, 5_000).unwrap(), 0);
+        // 1x leverage (1000 bps) → size equals borrow
+        assert_eq!(calculate_position_size(100_000_000, 1_000).unwrap(), 100_000_000);
+    }
+
+    // ===== New tests: check_vault_skew =====
+
+    #[test]
+    fn test_check_vault_skew_balanced() {
+        assert!(check_vault_skew(100, 100).is_ok());  // 0% skew
+        assert!(check_vault_skew(0, 0).is_ok());      // no OI
+    }
+
+    #[test]
+    fn test_check_vault_skew_moderate() {
+        assert!(check_vault_skew(180, 20).is_ok());   // 80% skew — under 90% threshold
+        assert!(check_vault_skew(20, 180).is_ok());   // symmetric
+    }
+
+    #[test]
+    fn test_check_vault_skew_suspended() {
+        assert!(check_vault_skew(191, 9).is_err());   // 91% skew → FillsSuspended
+        assert!(check_vault_skew(100, 0).is_err());   // 100% skew
+        assert!(check_vault_skew(0, 100).is_err());   // 100% skew (other direction)
+    }
+
+    #[test]
+    fn test_check_vault_skew_boundary() {
+        // The condition: diff * 10 > total * 9
+        // At exactly 90%: diff=90, total=100 → 90*10=900, 100*9=900 → NOT > → Ok
+        assert!(check_vault_skew(95, 5).is_ok());     // diff=90, total=100
+        // Just above 90%: diff=91, total=100 → 91*10=910 > 900 → Err
+        // Need total where diff/total > 0.9: e.g. 910 vs 90 → diff=820, total=1000
+        // 820*10=8200, 1000*9=9000, 8200 < 9000 → Ok (82% skew)
+        // Try: 901 vs 99 → diff=802, total=1000, 8020 < 9000 → Ok
+        // Try: 951 vs 49 → diff=902, total=1000, 9020 > 9000 → Err
+        assert!(check_vault_skew(951, 49).is_err());
+        // Right at boundary: 900 vs 100 → diff=800, total=1000, 8000 < 9000 → Ok
+        assert!(check_vault_skew(900, 100).is_ok());
+    }
+
+    // ===== New tests: spread tier boundaries =====
+
+    #[test]
+    fn test_calculate_min_spread_tier_boundaries() {
+        // Tier boundaries: 30/31, 55/56, 75/76, 90/91
+        // 30% skew (boundary of tier 1/2): diff=30, total=100 → tier 0..=30 → 5 bps
+        assert_eq!(calculate_min_spread(65, 35), 5);  // diff=30, skew_pct=30
+        // 31% skew → tier 31..=55 → 15 bps
+        // diff=31 out of 100: not exact with integers. Use 131 vs 69 → diff=62, total=200 → 31%
+        assert_eq!(calculate_min_spread(131, 69), 15);
+        // 55% skew: diff=55, total=100 → 15 bps
+        // 155 vs 45 → diff=110, total=200 → 55%
+        assert_eq!(calculate_min_spread(155, 45), 15);
+        // 56% skew → tier 56..=75 → 40 bps
+        // 156 vs 44 → diff=112, total=200 → 56%
+        assert_eq!(calculate_min_spread(156, 44), 40);
+        // 75% skew: 175 vs 25 → diff=150, total=200 → 75% → 40 bps
+        assert_eq!(calculate_min_spread(175, 25), 40);
+        // 76% skew → tier 76..=90 → 100 bps
+        // 176 vs 24 → diff=152, total=200 → 76%
+        assert_eq!(calculate_min_spread(176, 24), 100);
+        // 90% skew: 190 vs 10 → diff=180, total=200 → 90% → 100 bps
+        assert_eq!(calculate_min_spread(190, 10), 100);
+        // 91% skew → u16::MAX
+        // 191 vs 9 → diff=182, total=200 → 91%
+        assert_eq!(calculate_min_spread(191, 9), u16::MAX);
+    }
+
+    // ===== New tests: apply_haircut overflow =====
+
+    #[test]
+    fn test_apply_haircut_overflow() {
+        // u64::MAX with 0% haircut → u64::MAX
+        assert_eq!(apply_haircut(u64::MAX, 0).unwrap(), u64::MAX);
+        // >10000 bps haircut → underflow in (10000 - haircut), should error
+        assert!(apply_haircut(1_000_000, 10_001).is_err());
+    }
 }
 
 // Property-based tests — run with: cargo test --features proptest-tests
@@ -292,6 +420,54 @@ mod proptests {
             if let Ok(result) = checked_mul_div(a, b, c) {
                 prop_assert!(result <= u64::MAX);
             }
+        }
+
+        #[test]
+        fn pnl_long_short_symmetric(
+            entry in 1u64..=1_000_000_000u64,
+            exit in 1u64..=1_000_000_000u64,
+            size in 1u64..=1_000_000_000u64,
+        ) {
+            if let (Ok(pnl_long), Ok(pnl_short)) = (
+                calculate_pnl(entry, exit, size, &Side::Long),
+                calculate_pnl(entry, exit, size, &Side::Short),
+            ) {
+                prop_assert_eq!(pnl_long, -pnl_short);
+            }
+        }
+
+        #[test]
+        fn position_size_monotonic(
+            borrow in 1u64..=100_000_000u64,
+            lev_a in 1u64..=10_000u64,
+            lev_b in 1u64..=10_000u64,
+        ) {
+            if let (Ok(size_a), Ok(size_b)) = (
+                calculate_position_size(borrow, lev_a),
+                calculate_position_size(borrow, lev_b),
+            ) {
+                if lev_a <= lev_b {
+                    prop_assert!(size_a <= size_b);
+                }
+            }
+        }
+
+        #[test]
+        fn vault_skew_symmetric(
+            a in 0u64..=1_000_000_000u64,
+            b in 0u64..=1_000_000_000u64,
+        ) {
+            let r1 = check_vault_skew(a, b).is_ok();
+            let r2 = check_vault_skew(b, a).is_ok();
+            prop_assert_eq!(r1, r2);
+        }
+
+        #[test]
+        fn position_size_never_panics(
+            borrow in 0u64..=u64::MAX/2,
+            leverage in 0u64..=100_000u64,
+        ) {
+            let _ = calculate_position_size(borrow, leverage);
         }
     }
 }

@@ -48,7 +48,7 @@ pub fn process(
                 &[authority.clone(), global_config_ai.clone(), system_program.clone()],
             )?;
         }
-        global_config_ai.realloc(target, false)?;
+        global_config_ai.realloc(target, true)?;
     }
 
     // V3 init data: 5 Pubkeys = 160 bytes (jlp_mint, jlp_vault, msol_mint, msol_vault, pyth_msol_feed)
