@@ -4,6 +4,7 @@ pub mod atomic_close;
 pub mod liquidate;
 pub mod update_config;
 pub mod migrate_config;
+pub mod settle_funding;
 #[cfg(feature = "dfba")]
 pub mod execute_batch;
 #[cfg(feature = "dfba")]

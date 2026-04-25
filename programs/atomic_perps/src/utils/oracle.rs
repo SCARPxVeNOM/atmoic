@@ -121,6 +121,50 @@ fn normalize_to_6dp(value: u64, exponent: i32) -> Result<u64, ProgramError> {
     }
 }
 
+/// Validate Switchboard V2 aggregator price and check divergence from Pyth.
+/// Returns Ok(()) if no divergence or if switchboard account is not provided.
+/// Returns Err(OracleDivergence) if Pyth and Switchboard diverge by > ORACLE_DIVERGENCE_BPS.
+pub fn validate_switchboard_divergence(
+    switchboard_ai: &AccountInfo,
+    pyth_price_6dp: u64,
+) -> Result<(), ProgramError> {
+    use crate::constants::{SWITCHBOARD_SOL_USD_FEED, ORACLE_DIVERGENCE_BPS, BPS_DENOMINATOR};
+    use crate::ensure;
+
+    // Verify the account is the expected Switchboard aggregator
+    ensure!(*switchboard_ai.key == SWITCHBOARD_SOL_USD_FEED, AtomicPerpsError::BadInput);
+
+    let data = switchboard_ai.try_borrow_data()?;
+    // Switchboard V2 AggregatorAccountData: f64 result at offset 216, timestamp at 296
+    if data.len() < 304 {
+        return Err(AtomicPerpsError::BadInput.into());
+    }
+
+    // Read IEEE 754 f64 LE at offset 216
+    let price_f64 = f64::from_le_bytes(data[216..224].try_into().unwrap());
+    if price_f64 <= 0.0 || !price_f64.is_finite() {
+        return Err(AtomicPerpsError::BadInput.into());
+    }
+
+    // Convert to 6dp
+    let sw_price_6dp = (price_f64 * 1_000_000.0) as u64;
+
+    // Check divergence: |pyth - switchboard| / pyth > threshold
+    let diff = if pyth_price_6dp > sw_price_6dp {
+        pyth_price_6dp - sw_price_6dp
+    } else {
+        sw_price_6dp - pyth_price_6dp
+    };
+
+    let divergence_bps = (diff as u128 * BPS_DENOMINATOR as u128) / (pyth_price_6dp as u128);
+    ensure!(
+        divergence_bps <= ORACLE_DIVERGENCE_BPS as u128,
+        AtomicPerpsError::OracleDivergence
+    );
+
+    Ok(())
+}
+
 /// Validate JLP price (passed as instruction data) against SOL price sanity bounds.
 /// JLP has no Pyth feed — caller supplies the Jupiter pool virtual price.
 /// Sanity check: jlp_price must be within [sol_price / FACTOR, sol_price * FACTOR].

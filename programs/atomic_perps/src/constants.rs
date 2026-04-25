@@ -118,3 +118,20 @@ pub const PYTH_MSOL_USD_FEED_ID: [u8; 32] = [
 
 pub const OI_CAP_PCT: u64 = 80;
 pub const MIN_SPREAD_BPS: u16 = 5;
+
+// === Funding Rate Settlement (R-2) ===
+
+pub const FUNDING_INTERVAL_SECONDS: i64 = 28_800; // 8 hours
+pub const MAX_FUNDING_RATE_BPS: i64 = 100;         // ±1% max per 8h period
+
+// === PSF (Protocol Stability Fund, R-3) ===
+
+pub const PSF_MIN_RATIO_BPS: u64 = 500;    // 5% of vault TVL
+pub const PSF_FEE_SHARE_BPS: u64 = 1_000;  // 10% of protocol fees -> PSF
+
+// === Switchboard Fallback Oracle ===
+
+pub const SWITCHBOARD_SOL_USD_FEED: Pubkey =
+    solana_program::pubkey!("GvDMxPzN1sCj7L26YDK2HnMRXEQmQ2aemov8YBtPS7vR");
+
+pub const ORACLE_DIVERGENCE_BPS: u64 = 200; // 2% — halt if Pyth/Switchboard diverge

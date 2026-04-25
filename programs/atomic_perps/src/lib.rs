@@ -25,6 +25,7 @@ const DISC_ATOMIC_CLOSE:[u8; 8] = [0x06, 0x58, 0xa3, 0xce, 0x22, 0x34, 0xb7, 0xe
 const DISC_LIQUIDATE:   [u8; 8] = [0xdf, 0xb3, 0xe2, 0x7d, 0x30, 0x2e, 0x27, 0x4a];
 const DISC_UPDATE_CFG:  [u8; 8] = [0x1d, 0x9e, 0xfc, 0xbf, 0x0a, 0x53, 0xdb, 0x63];
 const DISC_MIGRATE_CFG: [u8; 8] = [0x5c, 0x83, 0x3a, 0x69, 0xd2, 0x9a, 0xe0, 0xc1];
+const DISC_SETTLE_FUND:[u8; 8] = [0xa2, 0xb3, 0xc4, 0xd5, 0xe6, 0xf7, 0x08, 0x19];
 #[cfg(feature = "dfba")]
 const DISC_EXEC_BATCH:  [u8; 8] = [0x70, 0x9f, 0xd3, 0x33, 0xee, 0x46, 0xd4, 0x3c];
 #[cfg(feature = "dfba")]
@@ -56,6 +57,7 @@ pub fn process_instruction(
         DISC_LIQUIDATE    => instructions::liquidate::process(program_id, accounts, data),
         DISC_UPDATE_CFG   => instructions::update_config::process(program_id, accounts, data),
         DISC_MIGRATE_CFG  => instructions::migrate_config::process(program_id, accounts, data),
+        DISC_SETTLE_FUND  => instructions::settle_funding::process(program_id, accounts, data),
         #[cfg(feature = "dfba")]
         DISC_EXEC_BATCH   => instructions::execute_batch::process(program_id, accounts, data),
         #[cfg(feature = "dfba")]

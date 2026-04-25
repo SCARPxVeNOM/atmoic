@@ -29,6 +29,9 @@ pub enum AtomicPerpsError {
     CorrelatedCapExceeded = 6023,
     JlpPriceOutOfRange = 6024,
     LiquidationGracePeriod = 6025,
+    FundingTooSoon = 6026,
+    FundingRateExceedsMax = 6027,
+    OracleDivergence = 6028,
 }
 
 impl From<AtomicPerpsError> for ProgramError {

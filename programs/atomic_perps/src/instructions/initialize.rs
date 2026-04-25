@@ -128,6 +128,8 @@ pub fn process(
         stress_active: false,
         total_correlated_collateral: 0,
         total_collateral: 0,
+        last_funding_at: 0,
+        accumulated_funding: 0,
     };
     save_config(global_config, &cfg)?;
 

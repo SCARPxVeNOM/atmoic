@@ -1,95 +1,229 @@
-import { FC } from "react";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { FC, useState, useCallback } from "react";
+import { useWalletModal } from "@solana/wallet-adapter-react-ui";
+import { useWallet } from "@solana/wallet-adapter-react";
 import { useOracle } from "./hooks/useOracle";
 import { usePosition } from "./hooks/usePosition";
-import { usePrivySession } from "./hooks/usePrivySession";
-import { PositionPanel } from "./components/PositionPanel";
+import { useFundingRate } from "./hooks/useFundingRate";
+import { IntroPage } from "./components/IntroPage";
+import { ChartPanel } from "./components/ChartPanel";
+import { TradePanel } from "./components/TradePanel";
+import { PositionsTable } from "./components/PositionsTable";
+import { DFBAView } from "./components/DFBAView";
+import { PortfolioView } from "./components/PortfolioView";
 import { SimplePanel } from "./components/SimplePanel";
-import { ProPanel } from "./components/ProPanel";
-import { CollateralHealth } from "./components/CollateralHealth";
-import { YieldDisplay } from "./components/YieldDisplay";
-import { ModeToggle } from "./components/ModeToggle";
-import { ModeProvider, useMode } from "./context/ModeContext";
+import { TweaksPanel, Tweaks } from "./components/TweaksPanel";
 
-const Dashboard: FC = () => {
+const NAV_ITEMS = ["Trade", "DFBA", "Portfolio"] as const;
+type Page = "intro" | (typeof NAV_ITEMS)[number];
+
+const UI_MODES = ["Simple", "Standard", "Pro"] as const;
+type UiMode = (typeof UI_MODES)[number];
+
+const HEADER_MARKETS_STATIC = [
+  { id: "SOL-USD", label: "SOL", price: 142.30, change: 2.4 },
+  { id: "BTC-USD", label: "BTC", price: 97480, change: -0.8 },
+  { id: "ETH-USD", label: "ETH", price: 3241, change: 1.2 },
+];
+
+const TWEAK_DEFAULTS: Tweaks = {
+  accentColor: "#a78bfa",
+  showPositions: true,
+  chartInterval: "15m",
+  maxLeverage: 15,
+};
+
+function PriceTag({ market, active, onClick }: {
+  market: typeof HEADER_MARKETS_STATIC[number]; active: boolean; onClick: () => void;
+}) {
+  return (
+    <button onClick={onClick} style={{
+      display: "flex", alignItems: "center", gap: 6,
+      padding: "4px 10px", borderRadius: 6, border: "1px solid",
+      borderColor: active ? "#30363d" : "transparent",
+      background: active ? "#161b22" : "transparent",
+      cursor: "pointer",
+    }}>
+      <span style={{ fontSize: 12, fontWeight: 600, color: "#e6edf3" }}>{market.label}</span>
+      <span style={{
+        fontSize: 11, fontFamily: "IBM Plex Mono,monospace", fontWeight: 600,
+        color: market.change >= 0 ? "#3fb68b" : "#ff5353",
+      }}>{market.change >= 0 ? "+" : ""}{market.change}%</span>
+    </button>
+  );
+}
+
+export const App: FC = () => {
+  const [page, setPage] = useState<Page>("intro");
+  const [activeMarket, setActiveMarket] = useState("SOL-USD");
+  const [tweaks, setTweaks] = useState<Tweaks>(TWEAK_DEFAULTS);
+  const [tweaksVisible, setTweaksVisible] = useState(false);
+  const [uiMode, setUiMode] = useState<UiMode>("Standard");
+
   const oracle = useOracle();
-  const { position, health, startConfirming, stopConfirming } = usePosition();
-  const { mode } = useMode();
-  const privy = usePrivySession();
+  const { position, health } = usePosition();
+  const funding = useFundingRate();
+  const { publicKey, disconnect } = useWallet();
+  const { setVisible } = useWalletModal();
+
+  const accent = tweaks.accentColor;
+  const solPrice = oracle?.price ?? 142.30;
+
+  // Live SOL price in header, others static
+  const headerMarkets = HEADER_MARKETS_STATIC.map(m =>
+    m.id === "SOL-USD" ? { ...m, price: solPrice } : m
+  );
+
+  const updateTweaks = useCallback((patch: Partial<Tweaks>) => {
+    setTweaks(prev => ({ ...prev, ...patch }));
+  }, []);
+
+  if (page === "intro") {
+    return <IntroPage onEnter={() => setPage("Trade")} />;
+  }
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <header className="border-b border-slate-800 px-6 py-4 flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">Atomic Perps</h1>
-          <p className="text-xs text-slate-500">
-            {mode === "simple"
-              ? "Trade SOL with leverage — one click."
-              : "Borrow, perp, hedge — one transaction, all-or-nothing."}
-          </p>
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#0d1117" }}>
+      {/* Header */}
+      <header style={{
+        height: 52, flexShrink: 0,
+        borderBottom: "1px solid #30363d",
+        display: "flex", alignItems: "center",
+        padding: "0 16px", gap: 0,
+      }}>
+        {/* Logo */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginRight: 20, cursor: "pointer" }}
+          onClick={() => setPage("intro")}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <rect width="24" height="24" rx="6" fill={accent} />
+            <path d="M12 4L20 18H4L12 4Z" fill="#0d1117" opacity="0.9" />
+            <circle cx="12" cy="15" r="2" fill="#0d1117" opacity="0.6" />
+          </svg>
+          <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.03em", color: "#e6edf3" }}>
+            IDL<span style={{ color: accent }}>Exchange</span>
+          </span>
         </div>
-        <div className="flex items-center gap-3">
-          <ModeToggle />
-          {oracle && (
-            <div className="text-xs text-slate-400 font-mono">
-              SOL ${oracle.price.toFixed(2)}
-            </div>
-          )}
-          {privy.enabled && !privy.authenticated && (
-            <button
-              onClick={privy.login}
-              className="px-3 py-1.5 text-xs rounded bg-indigo-600 hover:bg-indigo-500 text-white"
-            >
-              Login with Email
-            </button>
-          )}
-          {privy.enabled && privy.authenticated && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-400">
-                {privy.user?.email?.address ?? "Connected"}
+
+        {/* Nav */}
+        <nav style={{ display: "flex", gap: 2, marginRight: 16 }}>
+          {NAV_ITEMS.map(n => (
+            <button key={n} onClick={() => setPage(n)} style={{
+              padding: "5px 14px", fontSize: 13, fontWeight: 500,
+              borderRadius: 6, border: "none", cursor: "pointer",
+              background: page === n ? "#21262d" : "transparent",
+              color: page === n ? "#e6edf3" : "#8b949e",
+              transition: "color 0.15s, background 0.15s",
+            }}>{n}</button>
+          ))}
+        </nav>
+
+        {/* Market tabs */}
+        <div style={{ display: "flex", gap: 4, borderLeft: "1px solid #30363d", paddingLeft: 16 }}>
+          {headerMarkets.map(m => (
+            <PriceTag key={m.id}
+              market={m}
+              active={activeMarket === m.id && page === "Trade"}
+              onClick={() => { setActiveMarket(m.id); setPage("Trade"); }}
+            />
+          ))}
+        </div>
+
+        {/* Right side */}
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
+          {/* Mode toggle */}
+          <div style={{ display: "flex", borderRadius: 6, border: "1px solid #30363d", overflow: "hidden" }}>
+            {UI_MODES.map(m => (
+              <button key={m} onClick={() => setUiMode(m)} style={{
+                padding: "4px 10px", fontSize: 11, fontWeight: 600,
+                border: "none", cursor: "pointer",
+                background: uiMode === m ? "#21262d" : "transparent",
+                color: uiMode === m ? "#e6edf3" : "#8b949e",
+                transition: "all 0.15s",
+              }}>{m}</button>
+            ))}
+          </div>
+
+          {/* Tweaks toggle */}
+          <button onClick={() => setTweaksVisible(v => !v)} style={{
+            background: "none", border: "1px solid #30363d", borderRadius: 6,
+            padding: "4px 8px", cursor: "pointer", fontSize: 12, color: "#8b949e",
+          }} title="Tweaks">{"\u2699"}</button>
+
+          {/* Network badge */}
+          <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#8b949e" }}>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#3fb68b", boxShadow: "0 0 4px #3fb68b" }} />
+            Mainnet
+          </div>
+
+          {/* Connect wallet */}
+          {publicKey ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 11, fontFamily: "IBM Plex Mono,monospace", color: "#8b949e" }}>
+                {publicKey.toBase58().slice(0, 4)}...{publicKey.toBase58().slice(-4)}
               </span>
-              <button
-                onClick={privy.logout}
-                className="text-xs text-slate-500 hover:text-slate-300"
-              >
-                Sign out
-              </button>
+              <button onClick={() => disconnect()} style={{
+                padding: "6px 12px", background: "#21262d", border: "1px solid #30363d",
+                borderRadius: 8, color: "#e6edf3", fontSize: 12, cursor: "pointer",
+              }}>Disconnect</button>
             </div>
+          ) : (
+            <button onClick={() => setVisible(true)} style={{
+              padding: "6px 16px", background: accent, border: "none", borderRadius: 8,
+              color: "#0d1117", fontSize: 13, fontWeight: 700, cursor: "pointer",
+              letterSpacing: "-0.01em",
+            }}>Connect Wallet</button>
           )}
-          <WalletMultiButton />
         </div>
       </header>
 
-      <main className="flex-1 max-w-xl mx-auto w-full px-6 py-8 space-y-4">
-        {mode === "simple" ? (
-          <SimplePanel position={position} solPrice={oracle?.price ?? 0} />
-        ) : mode === "pro" ? (
-          <ProPanel
-            position={position}
-            solPrice={oracle?.price ?? 0}
-            onConfirming={startConfirming}
-            onConfirmed={stopConfirming}
-          />
-        ) : (
-          <PositionPanel
-            position={position}
-            solPrice={oracle?.price ?? 0}
-            onConfirming={startConfirming}
-            onConfirmed={stopConfirming}
-          />
-        )}
-        <CollateralHealth health={health} />
-        <YieldDisplay
-          collateralAmount={position?.collateralAmount}
-          solPrice={oracle?.price ?? 0}
-        />
-      </main>
+      {/* Workspace */}
+      {page === "Trade" && uiMode === "Simple" && (
+        <div style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <div style={{ width: 420, maxWidth: "100%" }}>
+            <SimplePanel position={position} solPrice={solPrice} />
+          </div>
+        </div>
+      )}
+
+      {page === "Trade" && uiMode !== "Simple" && (
+        <>
+          <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <ChartPanel
+                activeMarket={activeMarket}
+                onMarketChange={setActiveMarket}
+                solPrice={solPrice}
+                fundingRate8h={funding?.rate8h}
+              />
+            </div>
+            <TradePanel accentColor={accent} solPrice={solPrice} showProData={uiMode === "Pro"} />
+          </div>
+          {tweaks.showPositions && (
+            <PositionsTable
+              accentColor={accent}
+              position={position}
+              health={health}
+              solPrice={solPrice}
+            />
+          )}
+        </>
+      )}
+
+      {page === "DFBA" && (
+        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <DFBAView accentColor={accent} solPrice={solPrice} />
+        </div>
+      )}
+
+      {page === "Portfolio" && (
+        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <PortfolioView accent={accent} solPrice={solPrice} position={position} health={health} />
+        </div>
+      )}
+
+      {/* Tweaks panel */}
+      {tweaksVisible && (
+        <TweaksPanel tweaks={tweaks} onChange={updateTweaks} onClose={() => setTweaksVisible(false)} />
+      )}
     </div>
   );
 };
-
-export const App: FC = () => (
-  <ModeProvider>
-    <Dashboard />
-  </ModeProvider>
-);

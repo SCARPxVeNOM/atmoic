@@ -95,6 +95,19 @@ pub fn emit_stress_triggered(owner: &Pubkey, collateral_type: u8) {
     sol_log_data(&[&buf]);
 }
 
+pub fn emit_funding_settled(
+    position_owner: &Pubkey, funding_rate_bps: i64,
+    adjustment: i64, new_collateral: u64,
+) {
+    let mut buf = [0u8; 64];
+    buf[0..8].copy_from_slice(b"FUNDSTTL");
+    buf[8..40].copy_from_slice(position_owner.as_ref());
+    buf[40..48].copy_from_slice(&funding_rate_bps.to_le_bytes());
+    buf[48..56].copy_from_slice(&adjustment.to_le_bytes());
+    buf[56..64].copy_from_slice(&new_collateral.to_le_bytes());
+    sol_log_data(&[&buf]);
+}
+
 pub fn emit_correlated_cap_hit(owner: &Pubkey, current_pct_bps: u64, cap_bps: u64) {
     let mut buf = [0u8; 56];
     buf[0..8].copy_from_slice(b"CORRCAP_");

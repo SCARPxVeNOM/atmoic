@@ -44,13 +44,18 @@ pub struct GlobalConfig {
     pub stress_active: bool,
     pub total_correlated_collateral: u64,
     pub total_collateral: u64,
+    // V4 fields (funding settlement)
+    pub last_funding_at: i64,
+    pub accumulated_funding: i64,
 }
 
 impl GlobalConfig {
     pub const V1_SPACE: usize = 275; // Original layout
     pub const V2_SPACE: usize = 299; // V1 + 3*u64(24)
     // V3: V2 + 5*Pubkey(160) + bool(1) + 2*u64(16) = 299 + 177 = 476
-    pub const INIT_SPACE: usize = 476;
+    pub const V3_SPACE: usize = 476;
+    // V4: V3 + 2*i64(16) = 492
+    pub const INIT_SPACE: usize = 492;
 
     pub fn deserialize(data: &[u8]) -> Option<Self> {
         if data.len() < Self::V1_SPACE { return None; }
@@ -90,7 +95,7 @@ impl GlobalConfig {
         // V3 fields — multi-collateral support
         let (jlp_mint, jlp_vault, msol_mint, msol_vault, pyth_msol_feed,
              stress_active, total_correlated_collateral, total_collateral) =
-        if data.len() >= Self::INIT_SPACE {
+        if data.len() >= Self::V3_SPACE {
             let jm = pk(data, &mut o);
             let jv = pk(data, &mut o);
             let mm = pk(data, &mut o);
@@ -105,6 +110,15 @@ impl GlobalConfig {
              Pubkey::default(), Pubkey::default(), false, 0, 0)
         };
 
+        // V4 fields — funding settlement
+        let (last_funding_at, accumulated_funding) = if data.len() >= Self::INIT_SPACE {
+            let lfa = i64::from_le_bytes(data[o..o+8].try_into().unwrap()); o += 8;
+            let af = i64::from_le_bytes(data[o..o+8].try_into().unwrap()); let _ = o;
+            (lfa, af)
+        } else {
+            (0i64, 0i64)
+        };
+
         Some(Self {
             authority, fee_recipient, pyth_sol_feed, sol_mint, usdc_mint,
             sol_vault, usdc_reserve, is_paused, max_leverage, liquidation_threshold,
@@ -112,6 +126,7 @@ impl GlobalConfig {
             bump, program_authority_bump, total_long_oi, total_short_oi, psf_balance,
             jlp_mint, jlp_vault, msol_mint, msol_vault, pyth_msol_feed,
             stress_active, total_correlated_collateral, total_collateral,
+            last_funding_at, accumulated_funding,
         })
     }
 
@@ -146,7 +161,7 @@ impl GlobalConfig {
             wu64(buf, &mut o, self.psf_balance);
         }
         // V3 fields
-        if buf.len() >= Self::INIT_SPACE {
+        if buf.len() >= Self::V3_SPACE {
             wpk(buf, &mut o, &self.jlp_mint);
             wpk(buf, &mut o, &self.jlp_vault);
             wpk(buf, &mut o, &self.msol_mint);
@@ -155,6 +170,11 @@ impl GlobalConfig {
             buf[o] = self.stress_active as u8; o += 1;
             wu64(buf, &mut o, self.total_correlated_collateral);
             wu64(buf, &mut o, self.total_collateral);
+        }
+        // V4 fields
+        if buf.len() >= Self::INIT_SPACE {
+            buf[o..o+8].copy_from_slice(&self.last_funding_at.to_le_bytes()); o += 8;
+            buf[o..o+8].copy_from_slice(&self.accumulated_funding.to_le_bytes()); let _ = o;
         }
     }
 }
