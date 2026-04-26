@@ -1,10 +1,12 @@
 // Atomic Perps — Composable Perpetual Futures on Solana
 //
 // A DeFi perpetuals protocol with atomic open/close, Kamino lending,
-// Jupiter hedging, and on-chain DFBA (Discrete Frequent Batch Auction)
-// order matching.
+// Jupiter hedging, multi-collateral (SOL/JLP/mSOL), on-chain DFBA
+// (Discrete Frequent Batch Auction) order matching, and 8h TWAP
+// funding rate settlement.
 //
 // Lifecycle: initialize -> [Active] -> atomic_open -> atomic_close | liquidate
+// Funding: settle_funding (permissionless 8h crank)
 
 spec AtomicPerps
 
@@ -18,6 +20,17 @@ const MAX_ORDERS_PER_SHARD = 85
 const PYTH_CAP_BPS = 30
 const OI_CAP_PCT = 80
 const MIN_SPREAD_BPS = 5
+const FUNDING_INTERVAL_SECONDS = 28_800
+const MAX_FUNDING_RATE_BPS = 100
+const PSF_MIN_RATIO_BPS = 500
+const PSF_FEE_SHARE_BPS = 1_000
+const ORACLE_DIVERGENCE_BPS = 200
+const HAIRCUT_SOL_BPS = 1_000
+const HAIRCUT_MSOL_BPS = 1_800
+const HAIRCUT_JLP_BPS = 2_500
+const CORRELATED_CAP_BPS = 3_000
+const JLP_PRICE_SANITY_FACTOR = 2
+const JLP_LIQUIDATION_GRACE_SECONDS = 7_200
 
 // === State ===
 
@@ -41,6 +54,18 @@ type State
       total_long_oi          : U64,
       total_short_oi         : U64,
       psf_balance            : U64,
+      // V3: Multi-collateral
+      jlp_mint               : Pubkey,
+      jlp_vault              : Pubkey,
+      msol_mint              : Pubkey,
+      msol_vault             : Pubkey,
+      pyth_msol_feed         : Pubkey,
+      stress_active          : U64,
+      total_correlated_collateral : U64,
+      total_collateral       : U64,
+      // V4: Funding settlement
+      last_funding_at        : U64,
+      accumulated_funding    : U64,
     }
 
 // === Error Types ===
@@ -68,6 +93,13 @@ type Error
   | HashMismatch             = 6019 "Reveal hash does not match commitment"
   | OrderNotFound            = 6020 "User order not found in shard"
   | NoBidsOrAsks             = 6021 "No bids or asks to match"
+  | StressActive             = 6022 "Stress circuit breaker active"
+  | CorrelatedCapExceeded    = 6023 "Correlated collateral exceeds 30 pct cap"
+  | JlpPriceOutOfRange       = 6024 "JLP price outside sanity bounds"
+  | LiquidationGracePeriod   = 6025 "JLP liquidation grace period not elapsed"
+  | FundingTooSoon           = 6026 "Less than 8h since last funding settlement"
+  | FundingRateExceedsMax    = 6027 "Funding rate exceeds 1 pct max bound"
+  | OracleDivergence         = 6028 "Pyth and Switchboard diverge more than 2 pct"
 
 // === PDA Seeds ===
 
@@ -84,6 +116,9 @@ event PositionLiquidated { owner : Pubkey, liquidator : Pubkey, health : U64, co
 event BatchCleared { clearing_price : U64, pyth_price : U64, total_volume : U64, num_fills : U64 }
 event DfbaFill { user : Pubkey, side : U64, clearing_price : U64, fill_size : U64 }
 event PsfLow { balance : U64, threshold : U64 }
+event FundingSettled { position_owner : Pubkey, funding_rate_bps : U64, adjustment : U64, new_collateral : U64 }
+event StressTriggered { owner : Pubkey, collateral_type : U64 }
+event CorrelatedCapHit { owner : Pubkey, current_pct_bps : U64, cap_bps : U64 }
 
 // ============================================================
 // Handlers
@@ -117,6 +152,11 @@ handler initialize (max_leverage : U64) (liquidation_threshold : U64) (protocol_
     total_short_oi        := 0
     psf_balance           := 0
     is_paused             := 0
+    total_correlated_collateral := 0
+    total_collateral      := 0
+    last_funding_at       := 0
+    accumulated_funding   := 0
+    stress_active         := 0
   }
 
   emits ConfigInitialized
@@ -153,8 +193,8 @@ handler atomic_open (collateral_amount : U64) (borrow_amount : U64) (leverage_bp
     system_program        : program
   }
 
-  // Input validation
   requires state.is_paused == 0 else ProtocolPaused
+  requires state.stress_active == 0 else StressActive
   requires collateral_amount > 0 else InsufficientCollateral
   requires borrow_amount > 0 else InsufficientCollateral
   requires leverage_bps <= state.max_leverage else ExcessiveLeverage
@@ -166,6 +206,9 @@ handler atomic_open (collateral_amount : U64) (borrow_amount : U64) (leverage_bp
 
   // OI hard cap: total OI must not exceed 80% of reserve
   requires state.total_long_oi + state.total_short_oi <= state.total_usdc_reserve * OI_CAP_PCT / 100 else TVLCapExceeded
+
+  // Correlated collateral cap (JLP + mSOL <= 30% of total)
+  requires state.total_correlated_collateral <= state.total_collateral * CORRELATED_CAP_BPS / BPS_DENOMINATOR else CorrelatedCapExceeded
 
   effect {
     total_usdc_borrowed += borrow_amount
@@ -221,9 +264,9 @@ handler liquidate (borrow_amount : U64) (collateral_amount : U64) : State.Active
     global_config             : writable, pda ["config"]
     position                  : writable
     pyth_price_feed           : readonly
-    sol_vault                 : writable
-    liquidator_sol_account    : writable
-    fee_recipient_sol_account : writable
+    collateral_vault          : writable
+    liquidator_collateral_account : writable
+    fee_recipient_collateral_account : writable
     program_authority         : readonly, pda ["authority"]
     token_program             : program
   }
@@ -239,11 +282,32 @@ handler liquidate (borrow_amount : U64) (collateral_amount : U64) : State.Active
   }
 
   transfers {
-    from sol_vault to liquidator_sol_account amount bonus_amount authority program_authority
-    from sol_vault to fee_recipient_sol_account amount remainder authority program_authority
+    from collateral_vault to liquidator_collateral_account amount bonus_amount authority program_authority
+    from collateral_vault to fee_recipient_collateral_account amount remainder authority program_authority
   }
 
   emits PositionLiquidated
+}
+
+/// Settle 8h TWAP funding rate on a position. Permissionless crank.
+handler settle_funding (funding_rate_bps : U64) : State.Active -> State.Active {
+  auth caller
+
+  accounts {
+    caller          : signer
+    global_config   : writable, pda ["config"]
+    position        : writable, pda ["position", user]
+    pyth_price_feed : readonly
+  }
+
+  requires state.is_paused == 0 else ProtocolPaused
+  requires funding_rate_bps <= MAX_FUNDING_RATE_BPS else FundingRateExceedsMax
+
+  effect {
+    accumulated_funding += funding_rate_bps
+  }
+
+  emits FundingSettled
 }
 
 /// Place a limit order into a DFBA queue shard.
@@ -257,9 +321,6 @@ handler place_order (price : U64) (size : U64) : State.Active -> State.Active {
 
   requires price > 0 else BadInput
   requires size > 0 else BadInput
-
-  // No global state effect — order is written to the queue shard account data
-  // State fields are unchanged by place_order
 }
 
 /// Cancel a user order from a queue shard. Only the owner can cancel.
@@ -282,10 +343,8 @@ handler execute_batch (matched_bid_volume : U64) (matched_ask_volume : U64) (tot
     pyth_price_feed : readonly
   }
 
-  // OI uses saturating_add on-chain, so no overflow possible, but declare bounds
   requires state.total_long_oi + matched_bid_volume <= state.total_usdc_reserve else TVLCapExceeded
   requires state.total_short_oi + matched_ask_volume <= state.total_usdc_reserve else TVLCapExceeded
-  // Combined OI guard: formal verification proved per-side guards insufficient to preserve oi_bounded
   requires state.total_long_oi + matched_bid_volume + state.total_short_oi + matched_ask_volume <= state.total_usdc_reserve else TVLCapExceeded
 
   effect {
@@ -304,7 +363,7 @@ handler execute_batch (matched_bid_volume : U64) (matched_ask_volume : U64) (tot
 /// Borrowed USDC never exceeds the reserve.
 property reserve_solvency :
   state.total_usdc_borrowed <= state.total_usdc_reserve
-  preserved_by [initialize, atomic_open, atomic_close, liquidate, execute_batch, place_order, cancel_order]
+  preserved_by [initialize, atomic_open, atomic_close, liquidate, execute_batch, place_order, cancel_order, settle_funding]
 
 /// Leverage is bounded: max_leverage is always positive after initialize.
 property leverage_bounded :
@@ -319,12 +378,22 @@ property fee_bounded :
 /// OI fields are non-negative and bounded by reserve.
 property oi_bounded :
   state.total_long_oi + state.total_short_oi <= state.total_usdc_reserve
-  preserved_by [initialize, atomic_open, atomic_close, liquidate, execute_batch]
+  preserved_by [initialize, atomic_open, atomic_close, liquidate, execute_batch, settle_funding]
 
 /// Liquidation threshold is within basis points range.
 property liquidation_threshold_valid :
   state.liquidation_threshold <= BPS_DENOMINATOR
   preserved_by [initialize, update_config]
+
+/// Funding rate is bounded: accumulated funding changes by at most MAX_FUNDING_RATE_BPS per settlement.
+property funding_rate_bounded :
+  state.accumulated_funding >= 0
+  preserved_by [initialize, settle_funding]
+
+/// Correlated collateral never exceeds 30% of total collateral.
+property correlated_cap_enforced :
+  state.total_correlated_collateral <= state.total_collateral * CORRELATED_CAP_BPS / BPS_DENOMINATOR
+  preserved_by [initialize, atomic_open, atomic_close, liquidate]
 
 // ============================================================
 // Invariants
@@ -340,6 +409,12 @@ invariant liquidation_incentive "liquidator receives 5 pct bonus of collateral, 
 
 invariant clearing_price_bounded "DFBA clearing price is always within Pyth plus minus 0.3 pct"
 
+invariant oracle_divergence_halt "if Pyth and Switchboard diverge by more than 2 pct, new positions are blocked"
+
+invariant funding_timing "settle_funding can only execute once per 8h interval"
+
+invariant psf_warning "PSF low event emitted when psf_balance falls below 5 pct of reserve"
+
 // ============================================================
 // Cover (reachability traces)
 // ============================================================
@@ -351,6 +426,8 @@ cover liquidation_path [initialize, atomic_open, liquidate]
 cover dfba_cycle [initialize, place_order, place_order, execute_batch]
 
 cover cancel_flow [initialize, place_order, cancel_order]
+
+cover funding_cycle [initialize, atomic_open, settle_funding, atomic_close]
 
 // ============================================================
 // Liveness

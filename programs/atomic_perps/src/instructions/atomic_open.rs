@@ -12,11 +12,11 @@ use crate::constants::*;
 use crate::ensure;
 use crate::utils::oracle::{validate_and_get_price, validate_jlp_price};
 use crate::utils::math::{
-    apply_fee, apply_haircut, calculate_health_factor, calculate_min_spread,
-    calculate_position_size, check_vault_skew, token_to_usd,
+    apply_fee, apply_haircut, calculate_min_spread,
+    calculate_position_size, check_vault_skew, checked_mul_div, token_to_usd,
 };
 use crate::utils::token::{spl_transfer, spl_transfer_signed};
-use crate::utils::account::{create_pda_account, load_config, save_config, save_position};
+use crate::utils::account::{create_pda_account, load_config, load_position, save_config, save_position};
 use crate::events::emit_position_opened;
 #[cfg(feature = "kamino-cpi")]
 use crate::utils::cpi::kamino::cpi_borrow;
@@ -270,20 +270,29 @@ pub fn process(
         cpi_swap(jupiter_program, swap_accounts, &params.jupiter_swap_data)?;
     }
 
-    // -------- 8. Create + record position --------
+    // -------- 8. Create or reuse position account --------
     let perp_size = calculate_position_size(params.borrow_amount, params.leverage_bps)?;
     let now = Clock::get()?.unix_timestamp;
 
     let user_key = *user.key;
     let pos_seeds: &[&[u8]] = &[POSITION_SEED, user_key.as_ref(), &[position_bump]];
-    create_pda_account(
-        user,
-        position_ai,
-        system_program,
-        8 + Position::INIT_SPACE,
-        program_id,
-        pos_seeds,
-    )?;
+
+    // If position PDA already exists (from a previous closed position), reuse it.
+    // Otherwise create a new one.
+    if position_ai.data_len() == 0 {
+        create_pda_account(
+            user,
+            position_ai,
+            system_program,
+            8 + Position::INIT_SPACE,
+            program_id,
+            pos_seeds,
+        )?;
+    } else {
+        // Reuse existing account — verify it's a closed position
+        let existing = load_position(position_ai)?;
+        ensure!(!existing.is_open, AtomicPerpsError::BadInput);
+    }
 
     let position = Position {
         owner: user_key,
@@ -302,17 +311,18 @@ pub fn process(
         bump: position_bump,
     };
 
-    // -------- 9. Post-state health check --------
+    // -------- 9. Post-state initial margin check --------
+    // Perps margin model: collateral must be >= borrow / max_leverage.
+    // At 5x (leverage_bps=5000): min_collateral = borrow * 1000 / 5000 = borrow / 5
+    // At 10x (leverage_bps=10000): min_collateral = borrow * 1000 / 10000 = borrow / 10
     let post_collateral_usd = apply_haircut(
         token_to_usd(position.collateral_amount, collateral_price_6dp, coll_decimals)?,
         haircut_bps,
     )?;
-    let health = calculate_health_factor(
-        post_collateral_usd,
-        position.borrow_amount_usdc,
-        config.liquidation_threshold,
+    let min_collateral = checked_mul_div(
+        position.borrow_amount_usdc, 1_000, config.max_leverage,
     )?;
-    ensure!(health >= BPS_DENOMINATOR, AtomicPerpsError::PositionUnhealthy);
+    ensure!(post_collateral_usd >= min_collateral, AtomicPerpsError::PositionUnhealthy);
 
     save_position(position_ai, &position)?;
 

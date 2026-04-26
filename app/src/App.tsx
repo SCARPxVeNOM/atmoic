@@ -4,6 +4,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { useOracle } from "./hooks/useOracle";
 import { usePosition } from "./hooks/usePosition";
 import { useFundingRate } from "./hooks/useFundingRate";
+import { useTickers } from "./hooks/useTickers";
 import { IntroPage } from "./components/IntroPage";
 import { ChartPanel } from "./components/ChartPanel";
 import { TradePanel } from "./components/TradePanel";
@@ -19,10 +20,10 @@ type Page = "intro" | (typeof NAV_ITEMS)[number];
 const UI_MODES = ["Simple", "Standard", "Pro"] as const;
 type UiMode = (typeof UI_MODES)[number];
 
-const HEADER_MARKETS_STATIC = [
-  { id: "SOL-USD", label: "SOL", price: 142.30, change: 2.4 },
-  { id: "BTC-USD", label: "BTC", price: 97480, change: -0.8 },
-  { id: "ETH-USD", label: "ETH", price: 3241, change: 1.2 },
+const HEADER_MARKETS_FALLBACK = [
+  { id: "SOL-USD", label: "SOL", price: 0, change: 0 },
+  { id: "BTC-USD", label: "BTC", price: 0, change: 0 },
+  { id: "ETH-USD", label: "ETH", price: 0, change: 0 },
 ];
 
 const TWEAK_DEFAULTS: Tweaks = {
@@ -33,7 +34,7 @@ const TWEAK_DEFAULTS: Tweaks = {
 };
 
 function PriceTag({ market, active, onClick }: {
-  market: typeof HEADER_MARKETS_STATIC[number]; active: boolean; onClick: () => void;
+  market: { id: string; label: string; price: number; change: number }; active: boolean; onClick: () => void;
 }) {
   return (
     <button onClick={onClick} style={{
@@ -47,7 +48,7 @@ function PriceTag({ market, active, onClick }: {
       <span style={{
         fontSize: 11, fontFamily: "IBM Plex Mono,monospace", fontWeight: 600,
         color: market.change >= 0 ? "#3fb68b" : "#ff5353",
-      }}>{market.change >= 0 ? "+" : ""}{market.change}%</span>
+      }}>{market.change >= 0 ? "+" : ""}{market.change.toFixed(1)}%</span>
     </button>
   );
 }
@@ -62,16 +63,20 @@ export const App: FC = () => {
   const oracle = useOracle();
   const { position, health } = usePosition();
   const funding = useFundingRate();
+  const tickers = useTickers();
   const { publicKey, disconnect } = useWallet();
   const { setVisible } = useWalletModal();
 
   const accent = tweaks.accentColor;
-  const solPrice = oracle?.price ?? 142.30;
+  const solPrice = oracle?.price ?? tickers?.["SOL-USD"]?.price ?? 0;
 
-  // Live SOL price in header, others static
-  const headerMarkets = HEADER_MARKETS_STATIC.map(m =>
-    m.id === "SOL-USD" ? { ...m, price: solPrice } : m
-  );
+  // Live market data from Binance 24h tickers
+  const headerMarkets = HEADER_MARKETS_FALLBACK.map(m => {
+    const t = tickers?.[m.id];
+    if (t) return { ...m, price: t.price, change: t.change24h };
+    if (m.id === "SOL-USD" && solPrice) return { ...m, price: solPrice };
+    return m;
+  });
 
   const updateTweaks = useCallback((patch: Partial<Tweaks>) => {
     setTweaks(prev => ({ ...prev, ...patch }));

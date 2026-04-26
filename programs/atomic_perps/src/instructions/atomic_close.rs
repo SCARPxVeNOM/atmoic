@@ -134,44 +134,48 @@ pub fn process(
     // -------- 2. PnL --------
     let pnl = calculate_pnl(entry_price, exit_price, perp_size, &perp_side)?;
 
-    // -------- 3. Repay --------
-    spl_transfer(token_program, user_usdc_account, usdc_reserve, user, borrow_amount)?;
+    // -------- 3. Settle in collateral (perps-style — no USDC repayment from user) --------
+    // Convert borrow + fee to collateral units and deduct from return.
+    let pow = 10u64
+        .checked_pow(coll_decimals as u32)
+        .ok_or(AtomicPerpsError::MathOverflow)?;
 
-    // -------- 4. Settle PnL in collateral units --------
-    let pnl_in_collateral_abs: u64 = if pnl == 0 {
-        0
-    } else {
-        let pow = 10u64
-            .checked_pow(coll_decimals as u32)
-            .ok_or(AtomicPerpsError::MathOverflow)?;
+    // Borrow cost in collateral: borrow_usdc * 10^decimals / collateral_price
+    let borrow_in_collateral = checked_mul_div(borrow_amount, pow, collateral_price.max(1))?;
+
+    // Fee in collateral
+    let (_rem, fee_amount_usdc) = apply_fee(borrow_amount, config.protocol_fee_bps)?;
+    let fee_in_collateral = checked_mul_div(fee_amount_usdc, pow, collateral_price.max(1))?;
+
+    // PnL in collateral
+    let pnl_in_collateral_abs: u64 = if pnl == 0 { 0 } else {
         checked_mul_div(pnl.unsigned_abs(), pow, collateral_price.max(1))?
     };
 
-    let mut collateral_to_return = collateral_amount;
+    // Collateral return = deposit - borrow_cost - fee + PnL
+    let mut collateral_to_return = collateral_amount
+        .saturating_sub(borrow_in_collateral)
+        .saturating_sub(fee_in_collateral);
     if pnl > 0 {
-        collateral_to_return = collateral_to_return
-            .checked_add(pnl_in_collateral_abs)
-            .ok_or(AtomicPerpsError::MathOverflow)?;
+        collateral_to_return = collateral_to_return.saturating_add(pnl_in_collateral_abs);
         let vault_amount = read_token_amount(collateral_vault)?;
         collateral_to_return = collateral_to_return.min(vault_amount);
     } else if pnl < 0 {
         collateral_to_return = collateral_to_return.saturating_sub(pnl_in_collateral_abs);
     }
 
-    let (_rem, fee_amount_usdc) = apply_fee(borrow_amount, config.protocol_fee_bps)?;
-
     let authority_bump = config.program_authority_bump;
     let authority_seeds: &[&[u8]] = &[AUTHORITY_SEED, &[authority_bump]];
     let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
 
-    // PSF accrual: 10% of fee stays in reserve, 90% to fee_recipient (F-02 R-3)
-    let psf_portion = fee_amount_usdc / 10;
-    let recipient_fee = fee_amount_usdc.saturating_sub(psf_portion);
-
-    if recipient_fee > 0 {
-        spl_transfer_signed(token_program, usdc_reserve, fee_recipient_account, program_authority, recipient_fee, signer_seeds)?;
+    // Fee: transfer fee portion from vault to fee_recipient in collateral
+    let psf_portion_coll = fee_in_collateral / 10;
+    let recipient_fee_coll = fee_in_collateral.saturating_sub(psf_portion_coll);
+    if recipient_fee_coll > 0 {
+        spl_transfer_signed(token_program, collateral_vault, fee_recipient_account, program_authority, recipient_fee_coll, signer_seeds)?;
     }
-    config.psf_balance = config.psf_balance.saturating_add(psf_portion);
+    // PSF accrual in USDC equivalent (accounting only)
+    config.psf_balance = config.psf_balance.saturating_add(fee_amount_usdc / 10);
 
     if collateral_to_return > 0 {
         spl_transfer_signed(token_program, collateral_vault, user_collateral_account, program_authority, collateral_to_return, signer_seeds)?;

@@ -16,6 +16,7 @@ interface DisplayPosition {
   pnlPct: number;
   health: number;
   hc: string;
+  hedgeUsd: number;
 }
 
 function toDisplay(p: PositionView, h: HealthView | null, solPrice: number): DisplayPosition {
@@ -31,6 +32,7 @@ function toDisplay(p: PositionView, h: HealthView | null, solPrice: number): Dis
   const healthBps = h ? Number(h.healthFactorBps) : 10000;
   const health = healthBps / 10000;
   const hc = health > 1.3 ? "#3fb68b" : health > 1.0 ? "#d29922" : "#ff5353";
+  const hedgeUsdc = Number(p.hedgeAmount) / 1e6;
 
   return {
     market: "SOL-USD",
@@ -44,6 +46,7 @@ function toDisplay(p: PositionView, h: HealthView | null, solPrice: number): Dis
     pnlPct,
     health,
     hc,
+    hedgeUsd: hedgeUsdc,
   };
 }
 
@@ -65,7 +68,7 @@ export function PositionsTable({
   const { publicKey, signTransaction } = useWallet();
   const { connection } = useConnection();
 
-  const price = solPrice || 142.30;
+  const price = solPrice || 0;
   const positions: DisplayPosition[] =
     position?.isOpen ? [toDisplay(position, health ?? null, price)] : [];
 
@@ -77,6 +80,8 @@ export function PositionsTable({
 
   const totalPnl = positions.reduce((s, p) => s + p.pnl, 0);
 
+  const { signAllTransactions } = useWallet();
+
   const closePosition = async () => {
     if (!publicKey || !signTransaction) return;
     setBusy(true);
@@ -85,15 +90,32 @@ export function PositionsTable({
       const res = await fetch(`${API_BASE}/build-tx/close`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wallet: publicKey.toBase58(), useKamino: true }),
+        body: JSON.stringify({ wallet: publicKey.toBase58(), useKamino: false }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? "build failed");
-      const { tx: b64 } = await res.json();
-      const tx = VersionedTransaction.deserialize(Buffer.from(b64, "base64"));
-      const signed = await signTransaction(tx);
-      const sig = await connection.sendRawTransaction(signed.serialize());
-      await connection.confirmTransaction(sig, "confirmed");
-      setStatus(`Closed: ${sig.slice(0, 8)}...`);
+      const data = await res.json();
+      const b64List: string[] = data.txs ?? [data.tx];
+      const txList = b64List.map((b64: string) =>
+        VersionedTransaction.deserialize(Buffer.from(b64, "base64"))
+      );
+
+      let signedList: VersionedTransaction[];
+      if (signAllTransactions && txList.length > 1) {
+        signedList = await signAllTransactions(txList);
+      } else {
+        signedList = [];
+        for (const tx of txList) {
+          signedList.push(await signTransaction(tx));
+        }
+      }
+
+      let lastSig = "";
+      for (const signed of signedList) {
+        const sig = await connection.sendRawTransaction(signed.serialize());
+        await connection.confirmTransaction(sig, "confirmed");
+        lastSig = sig;
+      }
+      setStatus(`Closed: ${lastSig.slice(0, 8)}...`);
     } catch (e: any) {
       setStatus(e.message ?? String(e));
     } finally {
@@ -138,7 +160,7 @@ export function PositionsTable({
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
                 <tr>
-                  {["Market", "Side", "Lv", "Size", "Entry", "Mark", "PnL", "Health", ""].map(h => (
+                  {["Market", "Side", "Lv", "Size", "Entry", "Mark", "PnL", "Hedge", "Health", ""].map(h => (
                     <th key={h} style={{
                       padding: "5px 12px", color: "#8b949e", fontWeight: 400,
                       textAlign: ["Size", "Entry", "Mark", "PnL"].includes(h) ? "right" : "left",
@@ -175,6 +197,16 @@ export function PositionsTable({
                       <div style={{ fontSize: 10, color: p.pnl >= 0 ? "#3fb68b" : "#ff5353" }}>
                         {p.pnlPct >= 0 ? "+" : ""}{p.pnlPct.toFixed(2)}%
                       </div>
+                    </td>
+                    <td style={{ padding: "8px 12px" }}>
+                      {p.hedgeUsd > 0 ? (
+                        <span style={{ fontFamily: "IBM Plex Mono,monospace", fontSize: 12, color: "#58a6ff" }}>
+                          ${p.hedgeUsd.toFixed(2)}
+                          <span style={{ fontSize: 10, color: "#8b949e", marginLeft: 4 }}>via Jupiter</span>
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: 11, color: "#484f58" }}>None</span>
+                      )}
                     </td>
                     <td style={{ padding: "8px 12px" }}>
                       <span style={{ fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: p.hc }}>{p.health.toFixed(2)}</span>

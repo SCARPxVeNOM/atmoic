@@ -11,7 +11,7 @@ export function PortfolioView({
   position?: PositionView | null;
   health?: HealthView | null;
 }) {
-  const price = solPrice || 142.30;
+  const price = solPrice || 0;
   const hasPosition = position?.isOpen ?? false;
 
   const collSol = hasPosition ? Number(position!.collateralAmount) / 1e9 : 0;

@@ -6,7 +6,7 @@ import { describeTransaction } from "../lib/tx-description";
 import { usePrivySession } from "../hooks/usePrivySession";
 
 const COLLATERAL = [
-  { id: "SOL", label: "SOL", cut: 10, icon: "\u25CE" },
+  { id: "SOL", label: "SOL", cut: 0, icon: "\u25CE" },
   { id: "JLP", label: "JLP", cut: 25, icon: "\u2B21" },
   { id: "mSOL", label: "mSOL", cut: 18, icon: "\u25C8" },
 ];
@@ -48,12 +48,12 @@ export function TradePanel({
   const [optimistic, setOptimistic] = useState<{ side: string; value: number } | null>(null);
   const [vaultRisk, setVaultRisk] = useState<VaultRisk | null>(null);
 
-  const { publicKey, signTransaction } = useWallet();
+  const { publicKey, signTransaction, signAllTransactions } = useWallet();
   const { connection } = useConnection();
   const privy = usePrivySession();
 
   const accent = accentColor || "#58a6ff";
-  const price = solPrice || 142.30;
+  const price = solPrice || 0;
   const sol = parseFloat(amount) || 0;
   const cut = COLLATERAL.find(c => c.id === col)?.cut || 0;
 
@@ -96,31 +96,34 @@ export function TradePanel({
       const err = await res.json();
       throw new Error(err.message ?? err.error ?? "Transaction failed");
     }
-    const { tx: b64 } = await res.json();
-    const tx = VersionedTransaction.deserialize(Buffer.from(b64, "base64"));
+    const data = await res.json();
 
-    // Use Privy embedded wallet for auto-signing when session active
-    let signed: VersionedTransaction;
-    if (privy.enabled && !privy.needsFullSign && privy.embeddedWallet) {
-      try {
-        signed = await privy.embeddedWallet.signTransaction(tx);
-      } catch {
-        // Fallback to standard wallet
-        signed = await signTransaction(tx);
-      }
+    // Support both single tx (legacy: {tx}) and multi-tx ({txs})
+    const b64List: string[] = data.txs ?? [data.tx];
+    const txList = b64List.map((b64: string) =>
+      VersionedTransaction.deserialize(Buffer.from(b64, "base64"))
+    );
+
+    // Sign all transactions at once (Phantom shows one confirmation dialog)
+    let signedList: VersionedTransaction[];
+    if (signAllTransactions && txList.length > 1) {
+      signedList = await signAllTransactions(txList);
     } else {
-      signed = await signTransaction(tx);
+      signedList = [];
+      for (const tx of txList) {
+        signedList.push(await signTransaction(tx));
+      }
     }
 
-    const sig = await connection.sendRawTransaction(signed.serialize());
-    await connection.confirmTransaction(sig, "confirmed");
-
-    // Track spending for session cap
-    if (privy.enabled && privy.session?.active) {
-      privy.recordSpend(summary.fee / price); // approximate SOL fee
+    // Send sequentially, confirm each before the next
+    let lastSig = "";
+    for (const signed of signedList) {
+      const sig = await connection.sendRawTransaction(signed.serialize());
+      await connection.confirmTransaction(sig, "confirmed");
+      lastSig = sig;
     }
 
-    return sig;
+    return lastSig;
   };
 
   const requestOpen = () => {
@@ -151,7 +154,9 @@ export function TradePanel({
         side,
         leverageBps: leverage * 1000,
         hedgeAmount: hedgeAmount.toString(),
-        useKamino: true,
+        useKamino: false,
+        useJupiterHedge: useHedge,
+        jupiterHedgeAmount: hedgeAmount.toString(),
         collateralType: col,
         market: "SOL-PERP",
       });

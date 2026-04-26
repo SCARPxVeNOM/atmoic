@@ -65,7 +65,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
   const { connection } = useConnection();
   const batchQueue = useBatchQueue();
 
-  const oraclePrice = solPrice || 142.30;
+  const oraclePrice = solPrice || 0;
 
   // Default price input to oracle price
   useEffect(() => {

@@ -9,6 +9,7 @@ export interface PositionView {
   perpSide: number;
   perpSize: string;
   entryPrice: string;
+  hedgeAmount: string;
   isOpen: boolean;
 }
 

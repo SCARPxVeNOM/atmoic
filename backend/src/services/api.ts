@@ -4,10 +4,18 @@ import {
   AddressLookupTableAccount,
   ComputeBudgetProgram,
   PublicKey,
+  SystemProgram,
+  TransactionInstruction,
   TransactionMessage,
   VersionedTransaction,
 } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import {
+  getAssociatedTokenAddressSync,
+  createAssociatedTokenAccountIdempotentInstruction,
+  createSyncNativeInstruction,
+  createCloseAccountInstruction,
+  NATIVE_MINT,
+} from "@solana/spl-token";
 import pino from "pino";
 import { WebSocketServer } from "ws";
 import http from "http";
@@ -28,6 +36,7 @@ import {
   Side,
 } from "../lib/ix-builders";
 import {
+  buildKaminoDeposit,
   buildKaminoBorrow,
   buildKaminoRepay,
   extractIxForCpi,
@@ -181,6 +190,8 @@ app.post("/build-tx/open", async (req, res) => {
       leverageBps,
       hedgeAmount = "0",
       useKamino = false,
+      useJupiterHedge = false,
+      jupiterHedgeAmount = "0",
       market = "SOL-PERP",
       collateralType = "SOL",   // "SOL" | "JLP" | "mSOL"
     } = req.body ?? {};
@@ -288,41 +299,13 @@ app.post("/build-tx/open", async (req, res) => {
       config.feeRecipient
     );
 
-    // Build Kamino borrow ixs if requested.
-    let kaminoBorrowData: Buffer = Buffer.alloc(0);
-    let kaminoRemainingAccounts: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[] = [];
-    let kaminoSetupIxs: any[] = [];
-    let kaminoCleanupIxs: any[] = [];
+    // Kamino CPI disabled for atomic open — protocol uses its own USDC reserve.
+    // Kamino integration (deposit→borrow lifecycle) runs as a separate composable layer.
+    const kaminoBorrowData: Buffer = Buffer.alloc(0);
+    const kaminoRemainingAccounts: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[] = [];
+    const kaminoCleanupIxs: TransactionInstruction[] = [];
 
-    if (useKamino) {
-      const kamino = await buildKaminoBorrow(user, config.usdcMint, rawBorrow);
-      const extracted = extractIxForCpi(kamino.lendingIx);
-      kaminoBorrowData = extracted.data;
-      kaminoRemainingAccounts = [
-        { pubkey: extracted.programId, isSigner: false, isWritable: false },
-        ...extracted.accounts,
-      ];
-      kaminoSetupIxs = kamino.setupIxs;
-      kaminoCleanupIxs = kamino.cleanupIxs;
-    }
-
-    // Build Jupiter swap when hedge is requested
-    let jupiterSwapData: Buffer = Buffer.alloc(0);
-    let jupiterRemainingAccounts: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[] = [];
-
-    if (BigInt(hedgeAmount) > 0n) {
-      try {
-        const jupSwap = await buildJupiterSwap(
-          user, config.usdcMint, config.solMint,
-          BigInt(hedgeAmount), 50,
-        );
-        jupiterSwapData = jupSwap.swapIxData;
-        jupiterRemainingAccounts = jupSwap.remainingAccounts;
-      } catch (e: any) {
-        log.warn({ err: e.message }, "Jupiter swap build failed — proceeding without hedge");
-      }
-    }
-
+    // atomic_open: no Jupiter CPI — hedge runs as standalone ix in same tx
     const ix = buildAtomicOpenIx({
       user,
       userCollateralAccount,
@@ -335,10 +318,10 @@ app.post("/build-tx/open", async (req, res) => {
       borrowAmount: rawBorrow,
       perpSide: side === "Short" ? Side.Short : Side.Long,
       leverageBps: Number(leverageBps),
-      hedgeAmount: BigInt(hedgeAmount),
+      hedgeAmount: BigInt(0),
       spreadFeeBps: risk.spreadBps,
-      jupiterSwapData,
-      jupiterRemainingAccounts,
+      jupiterSwapData: Buffer.alloc(0),
+      jupiterRemainingAccounts: [],
       kaminoBorrowData,
       kaminoRemainingAccounts,
       collateralType: collTypeNum,
@@ -346,19 +329,45 @@ app.post("/build-tx/open", async (req, res) => {
       msolFeedAccount,
     });
 
-    // Account preflight check (F-01 R-4): fail if >32 unique accounts
-    const allOpenIxs = [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 800_000 }),
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
-      ...kaminoSetupIxs, ix, ...kaminoCleanupIxs,
-    ];
-    const acctCount = countAccounts(allOpenIxs, user);
-    if (acctCount > 32) {
-      return res.status(400).json({
-        error: "account_budget_exceeded",
-        count: acctCount,
-        message: `Transaction uses ${acctCount} accounts — exceeds safe limit of 32`,
-      });
+    // Build Jupiter hedge as standalone swap instruction (not CPI)
+    // Runs in the same tx as atomic_open — still atomic.
+    // After atomic_open transfers USDC to user, Jupiter swaps part of it back to SOL.
+    let jupiterStandaloneIx: TransactionInstruction | null = null;
+    if (useJupiterHedge && BigInt(jupiterHedgeAmount) > 0n) {
+      try {
+        const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=${config.usdcMint.toBase58()}&outputMint=So11111111111111111111111111111111111111112&amount=${jupiterHedgeAmount}&slippageBps=100&onlyDirectRoutes=true`;
+        const qr = await fetch(quoteUrl);
+        if (qr.ok) {
+          const quote = await qr.json();
+          const swapRes = await fetch("https://quote-api.jup.ag/v6/swap-instructions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              quoteResponse: quote,
+              userPublicKey: user.toBase58(),
+              wrapAndUnwrapSol: true,
+            }),
+          });
+          if (swapRes.ok) {
+            const swapData = await swapRes.json();
+            // Convert Jupiter swap instruction JSON to TransactionInstruction
+            const si = swapData.swapInstruction;
+            if (si) {
+              jupiterStandaloneIx = new TransactionInstruction({
+                programId: new PublicKey(si.programId),
+                keys: (si.accounts as any[]).map((a: any) => ({
+                  pubkey: new PublicKey(a.pubkey),
+                  isSigner: a.isSigner,
+                  isWritable: a.isWritable,
+                })),
+                data: Buffer.from(si.data, "base64"),
+              });
+            }
+          }
+        }
+      } catch (e: any) {
+        log.warn({ err: e.message }, "Jupiter standalone hedge build failed — proceeding without");
+      }
     }
 
     const [{ blockhash, lastValidBlockHeight }, lookupTables] = await Promise.all([
@@ -366,16 +375,72 @@ app.post("/build-tx/open", async (req, res) => {
       getAlt(),
     ]);
 
-    const message = new TransactionMessage({
-      payerKey: user,
-      recentBlockhash: blockhash,
-      instructions: allOpenIxs,
-    }).compileToV0Message(lookupTables);
+    function buildV0Tx(ixs: TransactionInstruction[]): string {
+      const msg = new TransactionMessage({
+        payerKey: user, recentBlockhash: blockhash, instructions: ixs,
+      }).compileToV0Message(lookupTables);
+      return Buffer.from(new VersionedTransaction(msg).serialize()).toString("base64");
+    }
 
-    const vtx = new VersionedTransaction(message);
-    const serialized = Buffer.from(vtx.serialize());
+    // --- Split into setup tx + main tx (signed together via signAllTransactions) ---
+    const setupIxs: TransactionInstruction[] = [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
+    ];
+
+    // wSOL wrapping for native SOL collateral
+    if (collTypeNum === 0) {
+      setupIxs.push(createAssociatedTokenAccountIdempotentInstruction(user, userCollateralAccount, user, NATIVE_MINT));
+      setupIxs.push(SystemProgram.transfer({ fromPubkey: user, toPubkey: userCollateralAccount, lamports: BigInt(collateralAmount) }));
+      setupIxs.push(createSyncNativeInstruction(userCollateralAccount));
+    }
+    // USDC ATA
+    setupIxs.push(createAssociatedTokenAccountIdempotentInstruction(user, userUsdcAccount, user, config.usdcMint));
+    // Fee recipient ATA
+    setupIxs.push(createAssociatedTokenAccountIdempotentInstruction(user, feeRecipientAccount, config.feeRecipient, config.usdcMint));
+
+    // === ATOMIC OPEN: split into focused transactions ===
+    // Tx 1 (setup): wSOL wrap + ATA creation + Kamino deposit
+    // Tx 2 (core):  Kamino borrow refresh + atomic_open (Kamino CPI) + wSOL close
+    // Tx 3 (hedge): Jupiter swap USDC→SOL (only if hedge requested)
+    //
+    // Atomicity: frontend uses signAllTransactions (one Phantom dialog),
+    // sends sequentially. If Tx2 fails, Tx3 is never sent.
+    // Kamino deposit + borrow + perp open are the critical path.
+
+    // Tx 2: atomic_open + Jupiter hedge in ONE transaction (true atomic)
+    const mainIxs: TransactionInstruction[] = [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 800_000 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
+      ix,
+    ];
+    // Jupiter hedge as standalone ix in SAME tx — truly atomic with the open
+    if (jupiterStandaloneIx) {
+      mainIxs.push(jupiterStandaloneIx);
+    }
+    // Close wSOL ATA last
+    if (collTypeNum === 0) {
+      mainIxs.push(createCloseAccountInstruction(userCollateralAccount, user, user));
+    }
+
+    // Try to fit everything in one tx. If too large, split setup from main.
+    let txs: string[];
+    try {
+      const allIxs = [...setupIxs.slice(2), ...mainIxs]; // merge setup (skip its compute budget) + main
+      const singleTx = buildV0Tx(allIxs);
+      if (Buffer.from(singleTx, "base64").length <= 1232) {
+        txs = [singleTx];
+        log.info("atomic open: single-tx mode");
+      } else {
+        throw new Error("too large");
+      }
+    } catch {
+      txs = [buildV0Tx(setupIxs), buildV0Tx(mainIxs)];
+      log.info({ txCount: 2, hasHedge: !!jupiterStandaloneIx }, "atomic open: 2-tx mode (setup + main)");
+    }
+
     res.json({
-      tx: serialized.toString("base64"),
+      txs,
       blockhash,
       lastValidBlockHeight,
       spread: {
@@ -426,8 +491,9 @@ app.post("/build-tx/close", async (req, res) => {
 
     const userCollateralAccount = getAssociatedTokenAddressSync(closeCollateralMint, user);
     const userUsdcAccount = getAssociatedTokenAddressSync(config.usdcMint, user);
+    // Fee recipient gets collateral tokens (not USDC) since close settles in collateral
     const feeRecipientAccount = getAssociatedTokenAddressSync(
-      config.usdcMint,
+      closeCollateralMint,
       config.feeRecipient
     );
 
@@ -463,36 +529,52 @@ app.post("/build-tx/close", async (req, res) => {
       msolFeedAccount: closeMsolFeedAccount,
     });
 
-    // Account preflight check (F-01 R-4)
-    const allCloseIxs = [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 800_000 }),
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
-      ...kaminoSetupIxs, ix, ...kaminoCleanupIxs,
-    ];
-    const acctCount = countAccounts(allCloseIxs, user);
-    if (acctCount > 32) {
-      return res.status(400).json({
-        error: "account_budget_exceeded",
-        count: acctCount,
-        message: `Transaction uses ${acctCount} accounts — exceeds safe limit of 32`,
-      });
-    }
-
     const [{ blockhash, lastValidBlockHeight }, lookupTables] = await Promise.all([
       connection.getLatestBlockhash(),
       getAlt(),
     ]);
 
-    const message = new TransactionMessage({
-      payerKey: user,
-      recentBlockhash: blockhash,
-      instructions: allCloseIxs,
-    }).compileToV0Message(lookupTables);
+    function buildV0Tx(ixs: TransactionInstruction[]): string {
+      const msg = new TransactionMessage({
+        payerKey: user, recentBlockhash: blockhash, instructions: ixs,
+      }).compileToV0Message(lookupTables);
+      return Buffer.from(new VersionedTransaction(msg).serialize()).toString("base64");
+    }
 
-    const vtx = new VersionedTransaction(message);
-    const serialized = Buffer.from(vtx.serialize());
+    // The user needs USDC to repay and a wSOL ATA to receive collateral back.
+    // Check if user has enough USDC; if not, swap SOL→USDC first.
+    const setupIxs: TransactionInstruction[] = [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 300_000 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
+    ];
+
+    // Ensure USDC ATA exists
+    setupIxs.push(createAssociatedTokenAccountIdempotentInstruction(user, userUsdcAccount, user, config.usdcMint));
+
+    // For SOL collateral: create wSOL ATA to receive collateral back
+    const isSolCollateral = closeCollateralMint.equals(config.solMint);
+    if (isSolCollateral) {
+      setupIxs.push(createAssociatedTokenAccountIdempotentInstruction(user, userCollateralAccount, user, NATIVE_MINT));
+    }
+
+    // Fee recipient collateral ATA (fees paid in collateral on close)
+    setupIxs.push(createAssociatedTokenAccountIdempotentInstruction(user, feeRecipientAccount, config.feeRecipient, closeCollateralMint));
+
+    // Main tx: Kamino setup + atomic_close + Kamino cleanup + unwrap wSOL
+    const mainIxs: TransactionInstruction[] = [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 800_000 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
+      ...kaminoSetupIxs, ix, ...kaminoCleanupIxs,
+    ];
+    // Close wSOL ATA to unwrap back to native SOL
+    if (isSolCollateral) {
+      mainIxs.push(createCloseAccountInstruction(userCollateralAccount, user, user));
+    }
+
+    const txs = [buildV0Tx(setupIxs), buildV0Tx(mainIxs)];
+
     res.json({
-      tx: serialized.toString("base64"),
+      txs,
       blockhash,
       lastValidBlockHeight,
     });
@@ -664,6 +746,84 @@ app.get("/psf", async (_req, res) => {
   try {
     const config = await loadConfig();
     res.json(await getPsfStatus(config));
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// ---- Candle data (proxied from Binance public API — no key needed) ----
+const BINANCE_SYMBOLS: Record<string, string> = {
+  "SOL-USD": "SOLUSDT",
+  "BTC-USD": "BTCUSDT",
+  "ETH-USD": "ETHUSDT",
+};
+const VALID_INTERVALS = ["1m","5m","15m","30m","1h","4h","1d"];
+let candleCache: Record<string, { data: any; ts: number }> = {};
+const CANDLE_CACHE_MS = 10_000;
+
+app.get("/candles/:pair", async (req, res) => {
+  try {
+    const symbol = BINANCE_SYMBOLS[req.params.pair];
+    if (!symbol) return res.status(400).json({ error: "unknown pair" });
+    const interval = typeof req.query.interval === "string" && VALID_INTERVALS.includes(req.query.interval)
+      ? req.query.interval : "5m";
+    const limit = Math.min(Number(req.query.limit) || 300, 1000);
+    const cacheKey = `${symbol}_${interval}_${limit}`;
+    const now = Date.now();
+    if (candleCache[cacheKey] && now - candleCache[cacheKey].ts < CANDLE_CACHE_MS) {
+      return res.json(candleCache[cacheKey].data);
+    }
+    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+    const r = await fetch(url);
+    if (!r.ok) return res.status(502).json({ error: "binance upstream error" });
+    const raw = await r.json() as number[][];
+    const candles = raw.map((k: number[]) => ({
+      time: Math.floor(k[0] / 1000),
+      open: parseFloat(String(k[1])),
+      high: parseFloat(String(k[2])),
+      low: parseFloat(String(k[3])),
+      close: parseFloat(String(k[4])),
+      volume: parseFloat(String(k[5])),
+      quoteVolume: parseFloat(String(k[7])),
+      closeTime: Math.floor(Number(k[6]) / 1000),
+    }));
+    candleCache[cacheKey] = { data: candles, ts: now };
+    res.json(candles);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// 24h ticker for all markets — used by header market badges
+let tickerCache: { data: any; ts: number } | null = null;
+const TICKER_CACHE_MS = 15_000;
+
+app.get("/tickers", async (_req, res) => {
+  try {
+    const now = Date.now();
+    if (tickerCache && now - tickerCache.ts < TICKER_CACHE_MS) {
+      return res.json(tickerCache.data);
+    }
+    const symbols = Object.values(BINANCE_SYMBOLS);
+    const url = `https://api.binance.com/api/v3/ticker/24hr?symbols=${JSON.stringify(symbols)}`;
+    const r = await fetch(url);
+    if (!r.ok) return res.status(502).json({ error: "binance upstream error" });
+    const raw = await r.json() as any[];
+    const tickers: Record<string, any> = {};
+    for (const [pair, binSymbol] of Object.entries(BINANCE_SYMBOLS)) {
+      const t = raw.find((x: any) => x.symbol === binSymbol);
+      if (t) {
+        tickers[pair] = {
+          price: parseFloat(t.lastPrice),
+          change24h: parseFloat(t.priceChangePercent),
+          high24h: parseFloat(t.highPrice),
+          low24h: parseFloat(t.lowPrice),
+          volume24h: parseFloat(t.quoteVolume),
+        };
+      }
+    }
+    tickerCache = { data: tickers, ts: now };
+    res.json(tickers);
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }

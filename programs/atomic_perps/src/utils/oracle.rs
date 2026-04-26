@@ -71,7 +71,9 @@ pub fn validate_and_get_price_for_feed(
 ) -> Result<(u64, u64), ProgramError> {
     ensure!(*pyth_feed_account.owner == PYTH_PUSH_ORACLE_PROGRAM, AtomicPerpsError::InvalidOracleFeed);
     let data = pyth_feed_account.try_borrow_data()?;
-    ensure!(data.len() >= 150, AtomicPerpsError::InvalidOracleFeed);
+    // Minimum: discriminator(8) + write_authority(32) + tag(1) = 41 bytes to read the tag.
+    // Full bounds check is done below via msg_end.
+    ensure!(data.len() >= DISCRIMINATOR + WRITE_AUTHORITY + 1, AtomicPerpsError::InvalidOracleFeed);
 
     let tag = data[DISCRIMINATOR + WRITE_AUTHORITY];
     let feed_off = match tag {

@@ -11,8 +11,11 @@ pub const JUPITER_PROGRAM_ID: Pubkey =
 pub const SPL_TOKEN_PROGRAM_ID: Pubkey =
     solana_program::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 
+// Pyth Receiver (pull oracle) — the owner of price feed accounts on mainnet.
+// Previously used the push oracle ("pythWSnswV...") which is the legacy program.
+// The actual feed accounts (7UVimff..., 4cSM2e6..., 42amVS4...) are owned by the Receiver.
 pub const PYTH_PUSH_ORACLE_PROGRAM: Pubkey =
-    solana_program::pubkey!("pythWSnswVUd12oZpeFP8e9CVaEqJg25g1Vtc2biRsT");
+    solana_program::pubkey!("rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ");
 
 // === Pyth Price Feed IDs (mainnet hex) ===
 
@@ -48,7 +51,7 @@ pub fn is_allowed_feed(_feed: &Pubkey) -> bool {
 
 // === Oracle Thresholds ===
 
-pub const MAX_ORACLE_AGE_SECONDS: u64 = 5;
+pub const MAX_ORACLE_AGE_SECONDS: u64 = 60;
 pub const MAX_ORACLE_CONFIDENCE_BPS: u64 = 100; // 1%
 
 // === Protocol Defaults ===
@@ -92,7 +95,7 @@ pub const JLP_DECIMALS: u8 = 6;
 
 // === Haircuts (BPS) — applied to collateral value for health calculation ===
 
-pub const HAIRCUT_SOL_BPS: u64 = 1_000;   // 10%
+pub const HAIRCUT_SOL_BPS: u64 = 0;        // 0% — SOL is the reference asset, no haircut needed
 pub const HAIRCUT_MSOL_BPS: u64 = 1_800;  // 18%  (SOL 10% + 8% depeg risk)
 pub const HAIRCUT_JLP_BPS: u64 = 2_500;   // 25%
 

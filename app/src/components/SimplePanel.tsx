@@ -15,7 +15,7 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
   position,
   solPrice,
 }) => {
-  const { publicKey, signTransaction } = useWallet();
+  const { publicKey, signTransaction, signAllTransactions } = useWallet();
   const { connection } = useConnection();
   const [amount, setAmount] = useState("0.1");
   const [leverage, setLeverage] = useState(2);
@@ -38,11 +38,22 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
       const err = await res.json();
       throw new Error(err.message ?? err.error ?? "Transaction failed");
     }
-    const { tx: b64 } = await res.json();
-    const tx = VersionedTransaction.deserialize(Buffer.from(b64, "base64"));
-    const signed = await signTransaction(tx);
-    const sig = await connection.sendRawTransaction(signed.serialize());
-    await connection.confirmTransaction(sig, "confirmed");
+    const data = await res.json();
+    const b64List: string[] = data.txs ?? [data.tx];
+    const txList = b64List.map((b64: string) =>
+      VersionedTransaction.deserialize(Buffer.from(b64, "base64"))
+    );
+    let signedList: VersionedTransaction[];
+    if (signAllTransactions && txList.length > 1) {
+      signedList = await signAllTransactions(txList);
+    } else {
+      signedList = [await signTransaction(txList[0])];
+    }
+    let sig = "";
+    for (const signed of signedList) {
+      sig = await connection.sendRawTransaction(signed.serialize());
+      await connection.confirmTransaction(sig, "confirmed");
+    }
     return sig;
   };
 
@@ -74,7 +85,8 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
         side,
         leverageBps: leverage * 1000,
         hedgeAmount: "0",
-        useKamino: true,
+        useKamino: false,
+        collateralType: "SOL",
         market,
       });
       setStatus("Position opened");
@@ -92,7 +104,7 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
     setBusy(true);
     setStatus(null);
     try {
-      await sendTx("/build-tx/close", { wallet: publicKey.toBase58(), useKamino: true });
+      await sendTx("/build-tx/close", { wallet: publicKey.toBase58(), useKamino: false });
       setStatus("Position closed");
     } catch (e: any) {
       setStatus(e.message ?? String(e));

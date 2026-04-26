@@ -61,6 +61,43 @@ function toLegacyIx(ix: Instruction): TransactionInstruction {
 }
 
 /**
+ * Build Kamino deposit instructions for a user.
+ * Deposits collateral into a Kamino obligation so it can be borrowed against.
+ */
+export async function buildKaminoDeposit(
+  user: PublicKey,
+  mint: PublicKey,
+  amount: bigint
+): Promise<KaminoIxBundle> {
+  const market = await getMarket();
+  await market.loadReserves();
+
+  const ownerAddr = fromLegacyPublicKey(user);
+  const mintAddr = fromLegacyPublicKey(mint);
+  const signer = createNoopSigner(ownerAddr);
+
+  const action = await KaminoAction.buildDepositTxns(
+    market,
+    new BN(amount.toString()),
+    mintAddr,
+    signer,
+    new VanillaObligation(KLEND_PROGRAM_ID),
+    true,        // useV2Ixs
+    undefined,   // scopeRefreshConfig
+    0,           // extraComputeBudget
+    true,        // includeAtaIxs
+  );
+
+  const setupIxs = [...action.setupIxs].map(toLegacyIx);
+  const lendingIxs = [...action.lendingIxs].map(toLegacyIx);
+  const cleanupIxs = [...action.cleanupIxs].map(toLegacyIx);
+
+  if (lendingIxs.length === 0) throw new Error("Kamino SDK returned no deposit ixs");
+
+  return { setupIxs, lendingIx: lendingIxs[0], cleanupIxs };
+}
+
+/**
  * Build Kamino borrow instructions for a user.
  *
  * @param user   Wallet pubkey (must sign the outer tx)

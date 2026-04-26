@@ -10,7 +10,7 @@ import { PublicKey } from "@solana/web3.js";
 import { connection } from "./connection";
 
 // Jupiter JLP Pool on mainnet
-const JLP_POOL = new PublicKey("5BUwFW4nRbftYTDMbgxykoFWKIYHJBMhVqDZ4pAkxg9L");
+const JLP_POOL = new PublicKey("5BUwFW4nRbftYTDMbgxykoFWqWHPzahFSNAaaaJtVKsq");
 
 // JLP Pool layout offsets (simplified):
 // pool_value: u128 at offset 200 (total pool value in USD 6dp)

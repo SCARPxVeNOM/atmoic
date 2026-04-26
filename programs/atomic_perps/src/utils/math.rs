@@ -194,8 +194,8 @@ mod tests {
         use crate::constants::{MSOL_MINT, JLP_MINT};
         assert_eq!(get_haircut_for_mint(&MSOL_MINT), 1_800);
         assert_eq!(get_haircut_for_mint(&JLP_MINT), 2_500);
-        // Unknown mint → SOL default
-        assert_eq!(get_haircut_for_mint(&Pubkey::default()), 1_000);
+        // Unknown mint → SOL default (0% — SOL is the reference asset)
+        assert_eq!(get_haircut_for_mint(&Pubkey::default()), 0);
     }
 
     #[test]
