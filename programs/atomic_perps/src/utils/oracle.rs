@@ -188,28 +188,28 @@ mod tests {
 
     #[test]
     fn test_validate_jlp_price_in_range() {
-        // $200 JLP with $150 SOL → bounds [75, 300], 200 is in range
-        assert!(validate_jlp_price(200_000_000, 150_000_000).is_ok());
+        // JLP ~$3.9 with SOL ~$86 → bounds [$1.72, $4300], $3.9 is in range
+        assert!(validate_jlp_price(3_920_000, 86_000_000).is_ok());
         // JLP price equals SOL price → always valid
         assert!(validate_jlp_price(150_000_000, 150_000_000).is_ok());
     }
 
     #[test]
     fn test_validate_jlp_price_lower_bound() {
-        // SOL = $150, factor = 2, lower = 150/2 = $75
-        // $75 exactly → Ok
-        assert!(validate_jlp_price(75_000_000, 150_000_000).is_ok());
-        // $74.999999 → Err (below lower bound)
-        assert!(validate_jlp_price(74_999_999, 150_000_000).is_err());
+        // SOL = $150, factor = 50, lower = 150/50 = $3
+        // $3 exactly → Ok
+        assert!(validate_jlp_price(3_000_000, 150_000_000).is_ok());
+        // $2.999999 → Err (below lower bound)
+        assert!(validate_jlp_price(2_999_999, 150_000_000).is_err());
     }
 
     #[test]
     fn test_validate_jlp_price_upper_bound() {
-        // SOL = $150, factor = 2, upper = 150*2 = $300
-        // $300 exactly → Ok
-        assert!(validate_jlp_price(300_000_000, 150_000_000).is_ok());
-        // $300.000001 → Err (above upper bound)
-        assert!(validate_jlp_price(300_000_001, 150_000_000).is_err());
+        // SOL = $150, factor = 50, upper = 150*50 = $7500
+        // $7500 exactly → Ok
+        assert!(validate_jlp_price(7_500_000_000, 150_000_000).is_ok());
+        // $7500.000001 → Err (above upper bound)
+        assert!(validate_jlp_price(7_500_000_001, 150_000_000).is_err());
     }
 
     #[test]
@@ -225,12 +225,12 @@ mod tests {
     #[test]
     fn test_validate_jlp_price_large_sol() {
         // Large SOL price — saturating_mul prevents overflow
-        let large_sol = u64::MAX / 10;
-        // upper = large_sol * 2 would overflow, saturating_mul caps at u64::MAX
+        let large_sol = u64::MAX / 100;
+        // upper = large_sol * 50 would overflow, saturating_mul caps at u64::MAX
         // Any JLP price <= u64::MAX should be in range (upper = u64::MAX)
         assert!(validate_jlp_price(large_sol, large_sol).is_ok());
-        // Lower bound = large_sol / 2
-        let lower = large_sol / 2;
+        // Lower bound = large_sol / 50
+        let lower = large_sol / 50;
         assert!(validate_jlp_price(lower, large_sol).is_ok());
         assert!(validate_jlp_price(lower - 1, large_sol).is_err());
     }

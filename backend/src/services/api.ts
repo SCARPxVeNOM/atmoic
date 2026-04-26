@@ -439,55 +439,21 @@ app.post("/build-tx/open", async (req, res) => {
           : "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So";  // mSOL
         const deficit = BigInt(collateralAmount) - userCollBalance;
         try {
-          // Jupiter V2 /build endpoint — returns instructions (not a full tx)
-          // We use the output amount (deficit) as the swap target
-          const buildUrl = `https://api.jup.ag/swap/v2/build?inputMint=So11111111111111111111111111111111111111112&outputMint=${targetMint}&amount=${deficit.toString()}&taker=${user.toBase58()}&slippageBps=150`;
-          const buildRes = await fetch(buildUrl);
-          if (buildRes.ok) {
-            const buildData = await buildRes.json();
-            // V2 /build returns individual instructions — assemble into a tx
-            const swapIxs: TransactionInstruction[] = [];
-            const toIx = (raw: any): TransactionInstruction => new TransactionInstruction({
-              programId: new PublicKey(raw.programId),
-              keys: (raw.accounts as any[]).map((a: any) => ({
-                pubkey: new PublicKey(a.pubkey),
-                isSigner: a.isSigner,
-                isWritable: a.isWritable,
-              })),
-              data: Buffer.from(raw.data, "base64"),
-            });
-            if (buildData.computeBudgetInstructions) {
-              swapIxs.push(...buildData.computeBudgetInstructions.map(toIx));
+          // Jupiter V2 /order with ExactOut — specify the exact output amount (JLP/mSOL deficit)
+          // and Jupiter computes the required SOL input. Returns a ready-to-sign serialized tx.
+          const orderUrl = `https://api.jup.ag/swap/v2/order?inputMint=So11111111111111111111111111111111111111112&outputMint=${targetMint}&amount=${deficit.toString()}&swapMode=ExactOut&taker=${user.toBase58()}&slippageBps=150`;
+          const orderRes = await fetch(orderUrl);
+          if (orderRes.ok) {
+            const orderData = await orderRes.json();
+            if (orderData.transaction) {
+              swapTx = orderData.transaction;
+              log.info({ collateral: collType, deficit: deficit.toString(), inAmount: orderData.inAmount, outAmount: orderData.outAmount }, "one-click: SOL→collateral swap built via V2 ExactOut");
+            } else {
+              log.warn({ orderData }, "Jupiter V2 /order returned no transaction");
             }
-            if (buildData.setupInstructions) {
-              swapIxs.push(...buildData.setupInstructions.map(toIx));
-            }
-            if (buildData.swapInstruction) {
-              swapIxs.push(toIx(buildData.swapInstruction));
-            }
-            if (buildData.cleanupInstruction) {
-              swapIxs.push(toIx(buildData.cleanupInstruction));
-            }
-            // Build V0 tx with ALT for compression
-            const altTables = buildData.addressesByLookupTableAddress;
-            let swapLookups = lookupTables;
-            if (altTables) {
-              // Jupiter provides its own lookup tables — load them
-              for (const [addr] of Object.entries(altTables)) {
-                try {
-                  const resp = await connection.getAddressLookupTable(new PublicKey(addr));
-                  if (resp.value) swapLookups = [...swapLookups, resp.value];
-                } catch {}
-              }
-            }
-            const swapMsg = new TransactionMessage({
-              payerKey: user, recentBlockhash: blockhash, instructions: swapIxs,
-            }).compileToV0Message(swapLookups);
-            swapTx = Buffer.from(new VersionedTransaction(swapMsg).serialize()).toString("base64");
-            log.info({ collateral: collType, deficit: deficit.toString() }, "one-click: SOL→collateral swap built via V2");
           } else {
-            const errBody = await buildRes.text();
-            log.warn({ status: buildRes.status, body: errBody }, "Jupiter V2 /build failed");
+            const errBody = await orderRes.text();
+            log.warn({ status: orderRes.status, body: errBody }, "Jupiter V2 /order ExactOut failed");
           }
         } catch (e: any) {
           log.warn({ err: e.message, collateral: collType }, "one-click swap failed — user must have collateral token");

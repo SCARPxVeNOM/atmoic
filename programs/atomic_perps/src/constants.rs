@@ -106,7 +106,7 @@ pub const CORRELATED_CAP_BPS: u64 = 10_000; // 100% — permissive for bootstrap
 // === JLP Risk Parameters ===
 
 pub const JLP_LIQUIDATION_GRACE_SECONDS: i64 = 7_200; // 2 hours
-pub const JLP_PRICE_SANITY_FACTOR: u64 = 2; // JLP price must be within 1/2x–2x of SOL
+pub const JLP_PRICE_SANITY_FACTOR: u64 = 50; // JLP price must be within 1/50x–50x of SOL (JLP ~$3.9, SOL ~$86)
 
 // === Pyth mSOL/USD Feed ID (mainnet hex) ===
 

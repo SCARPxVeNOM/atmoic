@@ -57,6 +57,22 @@ export function TradePanel({
   const sol = parseFloat(amount) || 0;
   const cut = COLLATERAL.find(c => c.id === col)?.cut || 0;
 
+  // Fetch collateral price for non-SOL collateral types
+  const [collPrice, setCollPrice] = useState<number>(0);
+  useEffect(() => {
+    if (col === "SOL") { setCollPrice(price); return; }
+    const mint = col === "JLP"
+      ? "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4"
+      : "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So";
+    fetch(`https://api.jup.ag/price/v3?ids=${mint}`)
+      .then(r => r.json())
+      .then(d => { if (d[mint]?.usdPrice) setCollPrice(Number(d[mint].usdPrice)); })
+      .catch(() => {});
+  }, [col, price]);
+
+  // effectivePrice: USD value per 1 unit of the selected collateral token
+  const effectivePrice = col === "SOL" ? price : collPrice;
+
   // Fetch vault risk for Pro mode
   useEffect(() => {
     if (!showProData) return;
@@ -69,10 +85,11 @@ export function TradePanel({
   }, [showProData]);
 
   const summary = useMemo(() => {
-    const posSize = sol * price * leverage;
-    const borrow = sol * price * (leverage - 1);
+    const collUsd = sol * effectivePrice;
+    const posSize = collUsd * leverage;
+    const borrow = collUsd * (leverage - 1);
     const entryPrice = price * (side === "Long" ? 1.0003 : 0.9997);
-    const effColl = sol * price * (1 - cut / 100);
+    const effColl = collUsd * (1 - cut / 100);
     const liqPrice = side === "Long"
       ? entryPrice * (1 - (effColl / posSize) * 0.85)
       : entryPrice * (1 + (effColl / posSize) * 0.85);
@@ -80,7 +97,7 @@ export function TradePanel({
     const health = borrow > 0 ? (effColl * 0.85) / borrow : 9.99;
     const healthCol = health > 1.3 ? "#3fb68b" : health > 1.0 ? "#d29922" : "#ff5353";
     return { posSize, borrow, entryPrice, liqPrice, fee, health, healthCol };
-  }, [sol, price, leverage, side, cut]);
+  }, [sol, effectivePrice, price, leverage, side, cut]);
 
   const sideColor = side === "Long" ? "#3fb68b" : "#ff5353";
   const btnDisabled = sol <= 0 || !publicKey || busy;
@@ -128,7 +145,7 @@ export function TradePanel({
 
   const requestOpen = () => {
     const collLabel = col === "SOL" ? `${sol} SOL` : `${sol} ${col}`;
-    const borrowUsd = (sol * price * (leverage - 1)).toFixed(2);
+    const borrowUsd = (sol * effectivePrice * (leverage - 1)).toFixed(2);
     const desc = `Open ${leverage}x ${col} ${side} \u2014 Deposit ${collLabel}, Borrow $${borrowUsd} USDC${col !== "SOL" ? ` (auto-converts SOL \u2192 ${col})` : ""}`;
     setConfirmDesc(desc);
   };
@@ -138,12 +155,12 @@ export function TradePanel({
     setConfirmDesc(null);
     setBusy(true);
     setStatus(null);
-    setOptimistic({ side, value: sol * price * leverage });
+    setOptimistic({ side, value: sol * effectivePrice * leverage });
     try {
       // Decimals: SOL=9, mSOL=9, JLP=6, USDC=6
       const decimals = col === "JLP" ? 6 : 9;
       const collAmount = BigInt(Math.floor(sol * 10 ** decimals));
-      const collValueUsd = sol * price; // approximate — SOL price used for all
+      const collValueUsd = sol * effectivePrice;
       const borrow = BigInt(Math.floor(collValueUsd * (leverage - 1) * 1e6));
       const hedgeAmount = useHedge ? BigInt(Math.floor(Number(borrow) * 0.25)) : BigInt(0);
       const sig = await sendTx("/build-tx/open", {
