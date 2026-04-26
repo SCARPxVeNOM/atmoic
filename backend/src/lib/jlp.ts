@@ -1,56 +1,50 @@
 /**
- * JLP (Jupiter Liquidity Provider) virtual price fetcher.
+ * JLP (Jupiter Liquidity Provider) price fetcher.
  *
- * Per limitations-handbook A-04: always fetch live JLP virtual price
- * from Jupiter pool state. Never use stored prices for health calculation.
+ * Per limitations-handbook A-04: always fetch live JLP virtual price.
+ * Never use stored prices for health calculation.
  * JLP collateral gets 25% haircut.
+ *
+ * Uses Jupiter Price API v3 instead of raw pool account parsing
+ * (the on-chain pool account has a complex Anchor layout).
  */
 
-import { PublicKey } from "@solana/web3.js";
-import { connection } from "./connection";
-
-// Jupiter JLP Pool on mainnet
-const JLP_POOL = new PublicKey("5BUwFW4nRbftYTDMbgxykoFWqWHPzahFSNAaaaJtVKsq");
-
-// JLP Pool layout offsets (simplified):
-// pool_value: u128 at offset 200 (total pool value in USD 6dp)
-// lp_supply: u64 at offset 232 (total LP tokens)
-const POOL_VALUE_OFFSET = 200;
-const LP_SUPPLY_OFFSET = 232;
+const JLP_MINT = "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4";
 
 export interface JlpPrice {
   /** Virtual price per JLP token in USD (6dp). */
   virtualPrice6dp: bigint;
-  /** Pool total value in USD (6dp). */
-  poolValueUsd: bigint;
-  /** Total LP supply. */
-  lpSupply: bigint;
+  /** USD price as a float (for logging). */
+  usdPrice: number;
 }
 
+let cache: { data: JlpPrice; ts: number } | null = null;
+const CACHE_MS = 10_000; // 10s cache
+
 /**
- * Fetch the live JLP virtual price from the on-chain Jupiter pool.
- * Virtual price = pool_value / lp_supply
+ * Fetch the live JLP price from Jupiter Price API v3.
  */
 export async function fetchJlpPrice(): Promise<JlpPrice> {
-  const acct = await connection.getAccountInfo(JLP_POOL);
-  if (!acct || acct.data.length < 240) {
-    throw new Error("JLP pool account not found or too small");
+  const now = Date.now();
+  if (cache && now - cache.ts < CACHE_MS) return cache.data;
+
+  const url = `https://api.jup.ag/price/v3?ids=${JLP_MINT}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Jupiter Price API error: ${res.status}`);
+
+  const body = await res.json();
+  const entry = body[JLP_MINT];
+  if (!entry || !entry.usdPrice) {
+    throw new Error("JLP price not available from Jupiter");
   }
 
-  const buf = acct.data;
+  const usdPrice = Number(entry.usdPrice);
+  // Convert to 6dp integer (e.g. $3.92 -> 3_920_000)
+  const virtualPrice6dp = BigInt(Math.round(usdPrice * 1e6));
 
-  // Read u128 pool value (as two u64s — low + high)
-  const poolValueLow = buf.readBigUInt64LE(POOL_VALUE_OFFSET);
-  const poolValueHigh = buf.readBigUInt64LE(POOL_VALUE_OFFSET + 8);
-  const poolValueUsd = poolValueLow + (poolValueHigh << 64n);
-
-  const lpSupply = buf.readBigUInt64LE(LP_SUPPLY_OFFSET);
-  if (lpSupply === 0n) throw new Error("JLP LP supply is zero");
-
-  // Virtual price = pool_value / lp_supply (normalize to 6dp)
-  const virtualPrice6dp = (poolValueUsd * 1_000_000n) / lpSupply;
-
-  return { virtualPrice6dp, poolValueUsd, lpSupply };
+  const data: JlpPrice = { virtualPrice6dp, usdPrice };
+  cache = { data, ts: now };
+  return data;
 }
 
 /**

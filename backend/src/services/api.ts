@@ -303,11 +303,12 @@ app.post("/build-tx/open", async (req, res) => {
       }
     }
 
-    const userCollateralAccount = getAssociatedTokenAddressSync(collateralMint, user);
-    const userUsdcAccount = getAssociatedTokenAddressSync(config.usdcMint, user);
+    const userCollateralAccount = getAssociatedTokenAddressSync(collateralMint, user, true);
+    const userUsdcAccount = getAssociatedTokenAddressSync(config.usdcMint, user, true);
     const feeRecipientAccount = getAssociatedTokenAddressSync(
       config.usdcMint,
-      config.feeRecipient
+      config.feeRecipient,
+      true,
     );
 
     // Kamino CPI disabled for atomic open — protocol uses its own USDC reserve.
@@ -599,12 +600,13 @@ app.post("/build-tx/close", async (req, res) => {
       closeCollateralVault = config.solVault;
     }
 
-    const userCollateralAccount = getAssociatedTokenAddressSync(closeCollateralMint, user);
-    const userUsdcAccount = getAssociatedTokenAddressSync(config.usdcMint, user);
+    const userCollateralAccount = getAssociatedTokenAddressSync(closeCollateralMint, user, true);
+    const userUsdcAccount = getAssociatedTokenAddressSync(config.usdcMint, user, true);
     // Fee recipient gets collateral tokens (not USDC) since close settles in collateral
     const feeRecipientAccount = getAssociatedTokenAddressSync(
       closeCollateralMint,
-      config.feeRecipient
+      config.feeRecipient,
+      true,
     );
 
     // Build Kamino repay ixs if requested.
