@@ -214,11 +214,18 @@ export function TradePanel({
               );
             })}
           </div>
+          {col !== "SOL" && (
+            <div style={{ fontSize: 10, color: "#58a6ff", marginTop: 6, display: "flex", alignItems: "center", gap: 4 }}>
+              {"\u26A1"} Auto-converts SOL {"\u2192"} {col} via Jupiter on deposit
+            </div>
+          )}
         </div>
 
         {/* Amount input */}
         <div>
-          <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Deposit Amount</div>
+          <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+            Deposit Amount {col !== "SOL" && <span style={{ color: "#58a6ff" }}>(in {col})</span>}
+          </div>
           <div style={{
             display: "flex", alignItems: "center", background: "#161b22",
             border: "1px solid #30363d", borderRadius: 8, padding: "9px 12px", gap: 8,

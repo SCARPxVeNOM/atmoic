@@ -388,16 +388,76 @@ app.post("/build-tx/open", async (req, res) => {
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
     ];
 
-    // wSOL wrapping for native SOL collateral
+    // Collateral setup: depends on collateral type
     if (collTypeNum === 0) {
+      // SOL: wrap native SOL into wSOL ATA
       setupIxs.push(createAssociatedTokenAccountIdempotentInstruction(user, userCollateralAccount, user, NATIVE_MINT));
       setupIxs.push(SystemProgram.transfer({ fromPubkey: user, toPubkey: userCollateralAccount, lamports: BigInt(collateralAmount) }));
       setupIxs.push(createSyncNativeInstruction(userCollateralAccount));
+    } else {
+      // JLP or mSOL: create ATA for the collateral token
+      setupIxs.push(createAssociatedTokenAccountIdempotentInstruction(user, userCollateralAccount, user, collateralMint));
     }
     // USDC ATA
     setupIxs.push(createAssociatedTokenAccountIdempotentInstruction(user, userUsdcAccount, user, config.usdcMint));
     // Fee recipient ATA
     setupIxs.push(createAssociatedTokenAccountIdempotentInstruction(user, feeRecipientAccount, config.feeRecipient, config.usdcMint));
+
+    // One-click stake-to-trade: if user selected JLP/mSOL but only has SOL,
+    // auto-swap SOL → JLP/mSOL via Jupiter in a separate preceding tx.
+    let swapTx: string | null = null;
+    if (collTypeNum === 1 || collTypeNum === 2) {
+      // Check if user already has enough JLP/mSOL
+      let userCollBalance = 0n;
+      try {
+        const acct = await connection.getAccountInfo(userCollateralAccount);
+        if (acct && acct.data.length >= 72) {
+          userCollBalance = acct.data.readBigUInt64LE(64);
+        }
+      } catch {}
+
+      if (userCollBalance < BigInt(collateralAmount)) {
+        // User doesn't have enough JLP/mSOL — swap SOL → JLP/mSOL via Jupiter
+        const targetMint = collTypeNum === 1
+          ? "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4"  // JLP
+          : "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So";  // mSOL
+        const deficit = BigInt(collateralAmount) - userCollBalance;
+        try {
+          // Get Jupiter quote for SOL → JLP/mSOL
+          const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${targetMint}&amount=${deficit.toString()}&slippageBps=100&onlyDirectRoutes=true`;
+          const qr = await fetch(quoteUrl);
+          if (qr.ok) {
+            const quote = await qr.json();
+            const swapRes = await fetch("https://quote-api.jup.ag/v6/swap", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                quoteResponse: quote,
+                userPublicKey: user.toBase58(),
+                wrapAndUnwrapSol: true,
+              }),
+            });
+            if (swapRes.ok) {
+              const swapData = await swapRes.json();
+              if (swapData.swapTransaction) {
+                // Jupiter returns a complete serialized tx — use directly
+                swapTx = swapData.swapTransaction;
+                log.info({ collateral: collType, deficit: deficit.toString() }, "one-click: SOL→collateral swap built");
+              }
+            }
+          }
+        } catch (e: any) {
+          log.warn({ err: e.message, collateral: collType }, "one-click swap failed — user must have collateral token");
+        }
+
+        if (!swapTx) {
+          return res.status(400).json({
+            error: "need_collateral",
+            message: `You need ${collType} tokens to use this collateral type. Get ${collType === "JLP" ? "JLP from jup.ag/perps/jlp-earn" : "mSOL from marinade.finance"}, or select SOL collateral.`,
+          });
+        }
+      }
+    }
 
     // === ATOMIC OPEN: split into focused transactions ===
     // Tx 1 (setup): wSOL wrap + ATA creation + Kamino deposit
@@ -423,20 +483,27 @@ app.post("/build-tx/open", async (req, res) => {
       mainIxs.push(createCloseAccountInstruction(userCollateralAccount, user, user));
     }
 
-    // Try to fit everything in one tx. If too large, split setup from main.
-    let txs: string[];
+    // Build transaction list
+    let txs: string[] = [];
+
+    // Tx 0 (optional): Jupiter swap SOL → JLP/mSOL for one-click stake-to-trade
+    if (swapTx) {
+      txs.push(swapTx);
+    }
+
+    // Try to fit setup+main in one tx. If too large, split.
     try {
-      const allIxs = [...setupIxs.slice(2), ...mainIxs]; // merge setup (skip its compute budget) + main
+      const allIxs = [...setupIxs.slice(2), ...mainIxs];
       const singleTx = buildV0Tx(allIxs);
       if (Buffer.from(singleTx, "base64").length <= 1232) {
-        txs = [singleTx];
-        log.info("atomic open: single-tx mode");
+        txs.push(singleTx);
+        log.info({ hasSwap: !!swapTx }, "atomic open: single-tx mode");
       } else {
         throw new Error("too large");
       }
     } catch {
-      txs = [buildV0Tx(setupIxs), buildV0Tx(mainIxs)];
-      log.info({ txCount: 2, hasHedge: !!jupiterStandaloneIx }, "atomic open: 2-tx mode (setup + main)");
+      txs.push(buildV0Tx(setupIxs), buildV0Tx(mainIxs));
+      log.info({ txCount: txs.length, hasSwap: !!swapTx, hasHedge: !!jupiterStandaloneIx }, "atomic open: multi-tx mode");
     }
 
     res.json({
