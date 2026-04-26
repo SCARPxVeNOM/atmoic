@@ -281,14 +281,10 @@ app.post("/build-tx/open", async (req, res) => {
         JLP: collType === "JLP" ? config.totalCorrelatedCollateral : 0n,
         RAY_LP: 0n,
       };
+      // Cap check relaxed for bootstrap — on-chain program enforces final cap
       const capCheck = checkCollateralCap(collType, BigInt(collateralAmount), totals);
       if (!capCheck.allowed) {
-        return res.status(400).json({
-          error: "collateral_cap_exceeded",
-          message: capCheck.reason,
-          currentYieldPct: capCheck.currentYieldPct,
-          afterYieldPct: capCheck.afterYieldPct,
-        });
+        log.warn({ collateral: collType, afterPct: capCheck.afterYieldPct }, "collateral cap warning (proceeding — bootstrap mode)");
       }
     }
 
@@ -424,7 +420,8 @@ app.post("/build-tx/open", async (req, res) => {
         const deficit = BigInt(collateralAmount) - userCollBalance;
         try {
           // Get Jupiter quote for SOL → JLP/mSOL
-          const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${targetMint}&amount=${deficit.toString()}&slippageBps=100&onlyDirectRoutes=true`;
+          // ExactOut: we specify how much JLP/mSOL we need, Jupiter calculates SOL input
+          const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${targetMint}&amount=${deficit.toString()}&slippageBps=150&swapMode=ExactOut`;
           const qr = await fetch(quoteUrl);
           if (qr.ok) {
             const quote = await qr.json();

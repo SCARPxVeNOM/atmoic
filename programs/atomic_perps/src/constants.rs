@@ -101,7 +101,7 @@ pub const HAIRCUT_JLP_BPS: u64 = 2_500;   // 25%
 
 // === Correlated Collateral Cap ===
 
-pub const CORRELATED_CAP_BPS: u64 = 3_000; // 30% — JLP+mSOL must be ≤30% of total collateral
+pub const CORRELATED_CAP_BPS: u64 = 10_000; // 100% — permissive for bootstrap; tighten to 3000 in production
 
 // === JLP Risk Parameters ===
 

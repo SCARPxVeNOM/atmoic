@@ -127,13 +127,9 @@ export function TradePanel({
   };
 
   const requestOpen = () => {
-    const desc = describeTransaction({
-      type: "open",
-      side,
-      collateralSol: sol,
-      leverage,
-      solPrice: price,
-    });
+    const collLabel = col === "SOL" ? `${sol} SOL` : `${sol} ${col}`;
+    const borrowUsd = (sol * price * (leverage - 1)).toFixed(2);
+    const desc = `Open ${leverage}x ${col} ${side} \u2014 Deposit ${collLabel}, Borrow $${borrowUsd} USDC${col !== "SOL" ? ` (auto-converts SOL \u2192 ${col})` : ""}`;
     setConfirmDesc(desc);
   };
 
@@ -144,12 +140,15 @@ export function TradePanel({
     setStatus(null);
     setOptimistic({ side, value: sol * price * leverage });
     try {
-      const lamports = BigInt(Math.floor(sol * 1e9));
-      const borrow = BigInt(Math.floor(sol * price * (leverage - 1) * 1e6));
+      // Decimals: SOL=9, mSOL=9, JLP=6, USDC=6
+      const decimals = col === "JLP" ? 6 : 9;
+      const collAmount = BigInt(Math.floor(sol * 10 ** decimals));
+      const collValueUsd = sol * price; // approximate — SOL price used for all
+      const borrow = BigInt(Math.floor(collValueUsd * (leverage - 1) * 1e6));
       const hedgeAmount = useHedge ? BigInt(Math.floor(Number(borrow) * 0.25)) : BigInt(0);
       const sig = await sendTx("/build-tx/open", {
         wallet: publicKey.toBase58(),
-        collateralAmount: lamports.toString(),
+        collateralAmount: collAmount.toString(),
         borrowAmount: borrow.toString(),
         side,
         leverageBps: leverage * 1000,
