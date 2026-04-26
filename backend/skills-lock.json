@@ -5,6 +5,11 @@
       "source": "ColosseumOrg/colosseum-copilot",
       "sourceType": "github",
       "computedHash": "41b0ecc9de10d54090f57f7c1eb383d8960a699df080f4a212e85f417a006976"
+    },
+    "integrating-jupiter": {
+      "source": "jup-ag/agent-skills",
+      "sourceType": "github",
+      "computedHash": "fb5b903ff44d20b275edbb0e302eb9338242f878f6105268a6387055507d7a95"
     }
   }
 }

@@ -153,13 +153,28 @@ app.get("/vault/risk", async (_req, res) => {
  */
 app.get("/quote", async (req, res) => {
   try {
-    const { inputMint, outputMint, amount, slippageBps = "50" } = req.query;
+    const { inputMint, outputMint, amount, slippageBps = "50", taker } = req.query;
     if (!inputMint || !outputMint || !amount) {
       return res.status(400).json({ error: "inputMint, outputMint, amount required" });
     }
-    const url = `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=${slippageBps}`;
+    // Jupiter V2: /order returns quote + transaction. We strip the tx and return quote fields only.
+    const takerAddr = taker || "11111111111111111111111111111111";
+    const url = `https://api.jup.ag/swap/v2/order?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=${slippageBps}&taker=${takerAddr}`;
     const r = await fetch(url);
-    res.status(r.status).json(await r.json());
+    if (!r.ok) return res.status(r.status).json(await r.json());
+    const data = await r.json();
+    // Return quote-level fields only (strip transaction)
+    res.json({
+      inputMint: data.inputMint,
+      outputMint: data.outputMint,
+      inAmount: data.inAmount,
+      outAmount: data.outAmount,
+      otherAmountThreshold: data.otherAmountThreshold,
+      swapMode: data.swapMode,
+      slippageBps: data.slippageBps,
+      priceImpactPct: data.priceImpactPct,
+      routePlan: data.routePlan,
+    });
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
@@ -325,51 +340,55 @@ app.post("/build-tx/open", async (req, res) => {
       msolFeedAccount,
     });
 
-    // Build Jupiter hedge as standalone swap instruction (not CPI)
-    // Runs in the same tx as atomic_open — still atomic.
-    // After atomic_open transfers USDC to user, Jupiter swaps part of it back to SOL.
-    let jupiterStandaloneIx: TransactionInstruction | null = null;
-    if (useJupiterHedge && BigInt(jupiterHedgeAmount) > 0n) {
-      try {
-        const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=${config.usdcMint.toBase58()}&outputMint=So11111111111111111111111111111111111111112&amount=${jupiterHedgeAmount}&slippageBps=100&onlyDirectRoutes=true`;
-        const qr = await fetch(quoteUrl);
-        if (qr.ok) {
-          const quote = await qr.json();
-          const swapRes = await fetch("https://quote-api.jup.ag/v6/swap-instructions", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              quoteResponse: quote,
-              userPublicKey: user.toBase58(),
-              wrapAndUnwrapSol: true,
-            }),
-          });
-          if (swapRes.ok) {
-            const swapData = await swapRes.json();
-            // Convert Jupiter swap instruction JSON to TransactionInstruction
-            const si = swapData.swapInstruction;
-            if (si) {
-              jupiterStandaloneIx = new TransactionInstruction({
-                programId: new PublicKey(si.programId),
-                keys: (si.accounts as any[]).map((a: any) => ({
-                  pubkey: new PublicKey(a.pubkey),
-                  isSigner: a.isSigner,
-                  isWritable: a.isWritable,
-                })),
-                data: Buffer.from(si.data, "base64"),
-              });
-            }
-          }
-        }
-      } catch (e: any) {
-        log.warn({ err: e.message }, "Jupiter standalone hedge build failed — proceeding without");
-      }
-    }
-
     const [{ blockhash, lastValidBlockHeight }, lookupTables] = await Promise.all([
       connection.getLatestBlockhash(),
       getAlt(),
     ]);
+
+    // Build Jupiter hedge as separate tx (USDC→SOL after atomic_open)
+    // Runs after atomic_open — sent sequentially via signAllTransactions.
+    let jupiterHedgeTx: string | null = null;
+    if (useJupiterHedge && BigInt(jupiterHedgeAmount) > 0n) {
+      try {
+        const buildUrl = `https://api.jup.ag/swap/v2/build?inputMint=${config.usdcMint.toBase58()}&outputMint=So11111111111111111111111111111111111111112&amount=${jupiterHedgeAmount}&taker=${user.toBase58()}&slippageBps=100`;
+        const buildRes = await fetch(buildUrl);
+        if (buildRes.ok) {
+          const buildData = await buildRes.json();
+          const toIx = (raw: any): TransactionInstruction => new TransactionInstruction({
+            programId: new PublicKey(raw.programId),
+            keys: (raw.accounts as any[]).map((a: any) => ({
+              pubkey: new PublicKey(a.pubkey),
+              isSigner: a.isSigner,
+              isWritable: a.isWritable,
+            })),
+            data: Buffer.from(raw.data, "base64"),
+          });
+          const hedgeIxs: TransactionInstruction[] = [];
+          if (buildData.computeBudgetInstructions) hedgeIxs.push(...buildData.computeBudgetInstructions.map(toIx));
+          if (buildData.setupInstructions) hedgeIxs.push(...buildData.setupInstructions.map(toIx));
+          if (buildData.swapInstruction) hedgeIxs.push(toIx(buildData.swapInstruction));
+          if (buildData.cleanupInstruction) hedgeIxs.push(toIx(buildData.cleanupInstruction));
+
+          // Use Jupiter's ALTs for compression
+          let hedgeLookups = [...lookupTables];
+          if (buildData.addressesByLookupTableAddress) {
+            for (const [addr] of Object.entries(buildData.addressesByLookupTableAddress)) {
+              try {
+                const resp = await connection.getAddressLookupTable(new PublicKey(addr));
+                if (resp.value) hedgeLookups.push(resp.value);
+              } catch {}
+            }
+          }
+          const hedgeMsg = new TransactionMessage({
+            payerKey: user, recentBlockhash: blockhash, instructions: hedgeIxs,
+          }).compileToV0Message(hedgeLookups);
+          jupiterHedgeTx = Buffer.from(new VersionedTransaction(hedgeMsg).serialize()).toString("base64");
+          log.info({ hedgeAmount: jupiterHedgeAmount }, "Jupiter hedge tx built via V2");
+        }
+      } catch (e: any) {
+        log.warn({ err: e.message }, "Jupiter hedge build failed — proceeding without");
+      }
+    }
 
     function buildV0Tx(ixs: TransactionInstruction[]): string {
       const msg = new TransactionMessage({
@@ -419,29 +438,55 @@ app.post("/build-tx/open", async (req, res) => {
           : "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So";  // mSOL
         const deficit = BigInt(collateralAmount) - userCollBalance;
         try {
-          // Get Jupiter quote for SOL → JLP/mSOL
-          // ExactOut: we specify how much JLP/mSOL we need, Jupiter calculates SOL input
-          const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${targetMint}&amount=${deficit.toString()}&slippageBps=150&swapMode=ExactOut`;
-          const qr = await fetch(quoteUrl);
-          if (qr.ok) {
-            const quote = await qr.json();
-            const swapRes = await fetch("https://quote-api.jup.ag/v6/swap", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                quoteResponse: quote,
-                userPublicKey: user.toBase58(),
-                wrapAndUnwrapSol: true,
-              }),
+          // Jupiter V2 /build endpoint — returns instructions (not a full tx)
+          // We use the output amount (deficit) as the swap target
+          const buildUrl = `https://api.jup.ag/swap/v2/build?inputMint=So11111111111111111111111111111111111111112&outputMint=${targetMint}&amount=${deficit.toString()}&taker=${user.toBase58()}&slippageBps=150`;
+          const buildRes = await fetch(buildUrl);
+          if (buildRes.ok) {
+            const buildData = await buildRes.json();
+            // V2 /build returns individual instructions — assemble into a tx
+            const swapIxs: TransactionInstruction[] = [];
+            const toIx = (raw: any): TransactionInstruction => new TransactionInstruction({
+              programId: new PublicKey(raw.programId),
+              keys: (raw.accounts as any[]).map((a: any) => ({
+                pubkey: new PublicKey(a.pubkey),
+                isSigner: a.isSigner,
+                isWritable: a.isWritable,
+              })),
+              data: Buffer.from(raw.data, "base64"),
             });
-            if (swapRes.ok) {
-              const swapData = await swapRes.json();
-              if (swapData.swapTransaction) {
-                // Jupiter returns a complete serialized tx — use directly
-                swapTx = swapData.swapTransaction;
-                log.info({ collateral: collType, deficit: deficit.toString() }, "one-click: SOL→collateral swap built");
+            if (buildData.computeBudgetInstructions) {
+              swapIxs.push(...buildData.computeBudgetInstructions.map(toIx));
+            }
+            if (buildData.setupInstructions) {
+              swapIxs.push(...buildData.setupInstructions.map(toIx));
+            }
+            if (buildData.swapInstruction) {
+              swapIxs.push(toIx(buildData.swapInstruction));
+            }
+            if (buildData.cleanupInstruction) {
+              swapIxs.push(toIx(buildData.cleanupInstruction));
+            }
+            // Build V0 tx with ALT for compression
+            const altTables = buildData.addressesByLookupTableAddress;
+            let swapLookups = lookupTables;
+            if (altTables) {
+              // Jupiter provides its own lookup tables — load them
+              for (const [addr] of Object.entries(altTables)) {
+                try {
+                  const resp = await connection.getAddressLookupTable(new PublicKey(addr));
+                  if (resp.value) swapLookups = [...swapLookups, resp.value];
+                } catch {}
               }
             }
+            const swapMsg = new TransactionMessage({
+              payerKey: user, recentBlockhash: blockhash, instructions: swapIxs,
+            }).compileToV0Message(swapLookups);
+            swapTx = Buffer.from(new VersionedTransaction(swapMsg).serialize()).toString("base64");
+            log.info({ collateral: collType, deficit: deficit.toString() }, "one-click: SOL→collateral swap built via V2");
+          } else {
+            const errBody = await buildRes.text();
+            log.warn({ status: buildRes.status, body: errBody }, "Jupiter V2 /build failed");
           }
         } catch (e: any) {
           log.warn({ err: e.message, collateral: collType }, "one-click swap failed — user must have collateral token");
@@ -465,16 +510,12 @@ app.post("/build-tx/open", async (req, res) => {
     // sends sequentially. If Tx2 fails, Tx3 is never sent.
     // Kamino deposit + borrow + perp open are the critical path.
 
-    // Tx 2: atomic_open + Jupiter hedge in ONE transaction (true atomic)
+    // Tx 2: atomic_open core instruction
     const mainIxs: TransactionInstruction[] = [
       ComputeBudgetProgram.setComputeUnitLimit({ units: 800_000 }),
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
       ix,
     ];
-    // Jupiter hedge as standalone ix in SAME tx — truly atomic with the open
-    if (jupiterStandaloneIx) {
-      mainIxs.push(jupiterStandaloneIx);
-    }
     // Close wSOL ATA last
     if (collTypeNum === 0) {
       mainIxs.push(createCloseAccountInstruction(userCollateralAccount, user, user));
@@ -500,7 +541,12 @@ app.post("/build-tx/open", async (req, res) => {
       }
     } catch {
       txs.push(buildV0Tx(setupIxs), buildV0Tx(mainIxs));
-      log.info({ txCount: txs.length, hasSwap: !!swapTx, hasHedge: !!jupiterStandaloneIx }, "atomic open: multi-tx mode");
+      log.info({ txCount: txs.length, hasSwap: !!swapTx, hasHedge: !!jupiterHedgeTx }, "atomic open: multi-tx mode");
+    }
+
+    // Tx 3 (optional): Jupiter hedge USDC→SOL as a separate tx after main open
+    if (jupiterHedgeTx) {
+      txs.push(jupiterHedgeTx);
     }
 
     res.json({
