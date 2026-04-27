@@ -8,25 +8,18 @@ use solana_program::{
 };
 
 pub struct LiquidateParams {
-    pub kamino_repay_data: Vec<u8>,
-    // V3: collateral price for JLP (0 = use oracle)
+    // V3: collateral price for JLP/mSOL (0 = use oracle)
     pub collateral_price_6dp: u64,
 }
 
 impl LiquidateParams {
     fn deserialize(data: &[u8]) -> Option<Self> {
-        if data.len() < 4 { return None; }
-        let mut o = 0;
-        let len = u32::from_le_bytes(data[o..o+4].try_into().unwrap()) as usize; o += 4;
-        if data.len() < o + len { return None; }
-        let kamino_repay_data = data[o..o+len].to_vec(); o += len;
-        // V3 extension: collateral_price_6dp (8 bytes)
-        let collateral_price_6dp = if o + 8 <= data.len() {
-            u64::from_le_bytes(data[o..o+8].try_into().unwrap())
+        let collateral_price_6dp = if data.len() >= 8 {
+            u64::from_le_bytes(data[0..8].try_into().unwrap())
         } else {
             0
         };
-        Some(Self { kamino_repay_data, collateral_price_6dp })
+        Some(Self { collateral_price_6dp })
     }
 }
 
@@ -35,14 +28,12 @@ use crate::constants::*;
 use crate::ensure;
 use crate::utils::oracle::{validate_and_get_price, validate_jlp_price};
 use crate::utils::math::{
-    apply_haircut, calculate_health_factor, checked_mul_div,
+    apply_haircut, calculate_pnl, checked_mul_div,
     get_decimals_for_mint, get_haircut_for_mint, token_to_usd,
 };
 use crate::utils::token::spl_transfer_signed;
 use crate::utils::account::{load_config, save_config, load_position, save_position};
 use crate::events::{emit_position_liquidated, emit_psf_low};
-#[cfg(feature = "kamino-cpi")]
-use crate::utils::cpi::kamino::cpi_repay;
 
 pub fn process(
     program_id: &Pubkey,
@@ -57,12 +48,11 @@ pub fn process(
     let global_config_ai = next_account_info(iter)?;
     let position_ai = next_account_info(iter)?;
     let pyth_price_feed = next_account_info(iter)?;
-    let collateral_vault = next_account_info(iter)?;           // index 4 (was sol_vault)
+    let collateral_vault = next_account_info(iter)?;           // index 4
     let liquidator_collateral_account = next_account_info(iter)?; // index 5
     let fee_recipient_collateral_account = next_account_info(iter)?; // index 6
     let program_authority = next_account_info(iter)?;
     let token_program = next_account_info(iter)?;
-    let remaining_accounts = &accounts[9..];
 
     ensure!(liquidator.is_signer, AtomicPerpsError::Unauthorized);
 
@@ -102,26 +92,18 @@ pub fn process(
     let coll_decimals = get_decimals_for_mint(&coll_mint);
     let haircut_bps = get_haircut_for_mint(&coll_mint);
     let collateral_amount = position.collateral_amount;
-    let borrow_amount = position.borrow_amount_usdc;
 
     // -------- 1. Oracle --------
     let clock = Clock::get()?;
     let (current_price, _conf) = validate_and_get_price(pyth_price_feed, &clock)?;
 
     // Get collateral price
-    let mut extra_remaining_offset: usize = 0;
     let collateral_price = if coll_mint == config.jlp_mint {
         validate_jlp_price(params.collateral_price_6dp, current_price)?;
         params.collateral_price_6dp
     } else if coll_mint == config.msol_mint {
-        ensure!(!remaining_accounts.is_empty(), AtomicPerpsError::BadInput);
-        let msol_feed = &remaining_accounts[0];
-        ensure!(*msol_feed.key == config.pyth_msol_feed, AtomicPerpsError::InvalidOracleFeed);
-        extra_remaining_offset = 1;
-        let (msol_price, _) = crate::utils::oracle::validate_and_get_price_for_feed(
-            msol_feed, &clock, &PYTH_MSOL_USD_FEED_ID,
-        )?;
-        msol_price
+        crate::utils::oracle::validate_msol_price(params.collateral_price_6dp, current_price)?;
+        params.collateral_price_6dp
     } else {
         current_price
     };
@@ -132,19 +114,46 @@ pub fn process(
         ensure!(age >= JLP_LIQUIDATION_GRACE_SECONDS, AtomicPerpsError::LiquidationGracePeriod);
     }
 
-    // -------- 2. Health check (with haircut) --------
+    // -------- 2. Margin-based health check --------
     // For JLP: use max(entry_price, current_price) per A-04 — yield can only help
     let health_price = if coll_mint == config.jlp_mint {
         collateral_price.max(position.collateral_entry_price)
     } else {
         collateral_price
     };
-    let collateral_usd = apply_haircut(
-        token_to_usd(collateral_amount, health_price, coll_decimals)?,
+
+    let pow = 10u64
+        .checked_pow(coll_decimals as u32)
+        .ok_or(AtomicPerpsError::MathOverflow)?;
+
+    // Compute unrealized PnL
+    let pnl = calculate_pnl(position.entry_price, current_price, position.perp_size, &position.perp_side)?;
+
+    // Effective collateral = collateral +/- PnL (in collateral token units)
+    let effective_coll = if pnl >= 0 {
+        let pnl_coll = checked_mul_div(pnl as u64, pow, collateral_price.max(1))?;
+        collateral_amount.saturating_add(pnl_coll)
+    } else {
+        let loss_coll = checked_mul_div((-pnl) as u64, pow, collateral_price.max(1))?;
+        collateral_amount.saturating_sub(loss_coll)
+    };
+
+    // Effective margin in USD (with haircut)
+    let effective_margin_usd = apply_haircut(
+        token_to_usd(effective_coll, health_price, coll_decimals)?,
         haircut_bps,
     )?;
-    let health = calculate_health_factor(collateral_usd, borrow_amount, config.liquidation_threshold)?;
-    ensure!(health < BPS_DENOMINATOR, AtomicPerpsError::PositionHealthy);
+
+    // Notional value (borrow_amount_usdc is repurposed as notional)
+    let notional = position.borrow_amount_usdc;
+
+    // Margin ratio: effective_margin / notional * 10000
+    let margin_ratio = if notional == 0 { u64::MAX } else {
+        checked_mul_div(effective_margin_usd, BPS_DENOMINATOR, notional)?
+    };
+
+    // Position must be below maintenance margin to be liquidatable
+    ensure!(margin_ratio < MAINTENANCE_MARGIN_BPS, AtomicPerpsError::PositionHealthy);
 
     // -------- 3. Split collateral --------
     let bonus_amount = checked_mul_div(collateral_amount, LIQUIDATION_BONUS_BPS, BPS_DENOMINATOR)?;
@@ -165,20 +174,9 @@ pub fn process(
     emit_position_liquidated(
         &position.owner,
         liquidator.key,
-        health,
+        margin_ratio,
         collateral_amount,
     );
-
-    let cpi_remaining = &remaining_accounts[extra_remaining_offset..];
-    #[cfg(feature = "kamino-cpi")]
-    if !params.kamino_repay_data.is_empty() {
-        ensure!(cpi_remaining.len() >= 2, AtomicPerpsError::BadInput);
-        let kamino_program = &cpi_remaining[0];
-        let repay_accounts = &cpi_remaining[1..];
-        cpi_repay(kamino_program, repay_accounts, &params.kamino_repay_data)?;
-    }
-    #[cfg(not(feature = "kamino-cpi"))]
-    { let _ = &params; let _ = cpi_remaining; }
 
     // Decrement collateral tracking
     let deposit_usd = token_to_usd(collateral_amount, position.collateral_entry_price, coll_decimals).unwrap_or(0);
@@ -187,7 +185,6 @@ pub fn process(
         config.total_correlated_collateral = config.total_correlated_collateral.saturating_sub(deposit_usd);
     }
 
-    config.total_usdc_borrowed = config.total_usdc_borrowed.saturating_sub(borrow_amount);
     match position.perp_side {
         crate::state::Side::Long => {
             config.total_long_oi = config.total_long_oi.saturating_sub(position.perp_size);
@@ -196,8 +193,9 @@ pub fn process(
             config.total_short_oi = config.total_short_oi.saturating_sub(position.perp_size);
         }
     }
-    // PSF coverage warning — emit event if below 5% of reserve
-    let psf_threshold = config.total_usdc_reserve / 20;
+
+    // PSF coverage warning — emit event if below 5% of total collateral
+    let psf_threshold = config.total_collateral / 20;
     if config.psf_balance < psf_threshold {
         emit_psf_low(config.psf_balance, psf_threshold);
     }

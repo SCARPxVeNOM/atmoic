@@ -116,14 +116,30 @@ pub fn get_decimals_for_mint(mint: &Pubkey) -> u8 {
     }
 }
 
-/// Dynamic spread check — rejects fills if vault skew > 90%.
-pub fn check_vault_skew(long_oi: u64, short_oi: u64) -> Result<(), ProgramError> {
+/// Calculate notional position size from collateral USD value and leverage.
+/// notional = collateral_usd * leverage_bps / 1000
+pub fn calculate_notional(collateral_usd: u64, leverage_bps: u64) -> Result<u64, ProgramError> {
+    checked_mul_div(collateral_usd, leverage_bps, 1_000)
+}
+
+/// Directional skew check — rejects fills only if they would *increase* skew past 90%.
+/// Trades that reduce or maintain skew always pass, even at extreme skew levels.
+/// This solves the cold-start problem: when skew is 100% long, shorts can still open.
+pub fn check_vault_skew(long_oi: u64, short_oi: u64, new_side: &Side) -> Result<(), ProgramError> {
     let total = long_oi.saturating_add(short_oi);
     if total == 0 { return Ok(()); }
     let diff = if long_oi > short_oi { long_oi - short_oi } else { short_oi - long_oi };
     // skew > 90% means diff * 100 / total > 90, i.e. diff * 10 > total * 9
     if diff.saturating_mul(10) > total.saturating_mul(9) {
-        return Err(AtomicPerpsError::FillsSuspended.into());
+        // Skew is extreme — only block if new position would make it worse
+        let would_increase = match new_side {
+            Side::Long => long_oi >= short_oi,
+            Side::Short => short_oi >= long_oi,
+        };
+        if would_increase {
+            return Err(AtomicPerpsError::FillsSuspended.into());
+        }
+        // New position reduces skew — allow it through
     }
     Ok(())
 }
@@ -279,40 +295,59 @@ mod tests {
         assert_eq!(calculate_position_size(100_000_000, 1_000).unwrap(), 100_000_000);
     }
 
-    // ===== New tests: check_vault_skew =====
+    // ===== New tests: check_vault_skew (directional) =====
 
     #[test]
     fn test_check_vault_skew_balanced() {
-        assert!(check_vault_skew(100, 100).is_ok());  // 0% skew
-        assert!(check_vault_skew(0, 0).is_ok());      // no OI
+        // Balanced — any side allowed
+        assert!(check_vault_skew(100, 100, &Side::Long).is_ok());
+        assert!(check_vault_skew(100, 100, &Side::Short).is_ok());
+        assert!(check_vault_skew(0, 0, &Side::Long).is_ok());
+        assert!(check_vault_skew(0, 0, &Side::Short).is_ok());
     }
 
     #[test]
     fn test_check_vault_skew_moderate() {
-        assert!(check_vault_skew(180, 20).is_ok());   // 80% skew — under 90% threshold
-        assert!(check_vault_skew(20, 180).is_ok());   // symmetric
+        // 80% skew — under 90% threshold, any side allowed
+        assert!(check_vault_skew(180, 20, &Side::Long).is_ok());
+        assert!(check_vault_skew(180, 20, &Side::Short).is_ok());
+        assert!(check_vault_skew(20, 180, &Side::Long).is_ok());
+        assert!(check_vault_skew(20, 180, &Side::Short).is_ok());
     }
 
     #[test]
-    fn test_check_vault_skew_suspended() {
-        assert!(check_vault_skew(191, 9).is_err());   // 91% skew → FillsSuspended
-        assert!(check_vault_skew(100, 0).is_err());   // 100% skew
-        assert!(check_vault_skew(0, 100).is_err());   // 100% skew (other direction)
+    fn test_check_vault_skew_suspended_increasing() {
+        // 91% skew long-heavy → adding more longs blocked
+        assert!(check_vault_skew(191, 9, &Side::Long).is_err());
+        // 100% skew long → adding longs blocked
+        assert!(check_vault_skew(100, 0, &Side::Long).is_err());
+        // 100% skew short → adding shorts blocked
+        assert!(check_vault_skew(0, 100, &Side::Short).is_err());
+    }
+
+    #[test]
+    fn test_check_vault_skew_allows_rebalancing() {
+        // 100% skew long → shorts ALLOWED (they reduce skew)
+        assert!(check_vault_skew(100, 0, &Side::Short).is_ok());
+        // 100% skew short → longs ALLOWED (they reduce skew)
+        assert!(check_vault_skew(0, 100, &Side::Long).is_ok());
+        // 91% skew long-heavy → shorts allowed
+        assert!(check_vault_skew(191, 9, &Side::Short).is_ok());
+        // 91% skew short-heavy → longs allowed
+        assert!(check_vault_skew(9, 191, &Side::Long).is_ok());
     }
 
     #[test]
     fn test_check_vault_skew_boundary() {
-        // The condition: diff * 10 > total * 9
-        // At exactly 90%: diff=90, total=100 → 90*10=900, 100*9=900 → NOT > → Ok
-        assert!(check_vault_skew(95, 5).is_ok());     // diff=90, total=100
-        // Just above 90%: diff=91, total=100 → 91*10=910 > 900 → Err
-        // Need total where diff/total > 0.9: e.g. 910 vs 90 → diff=820, total=1000
-        // 820*10=8200, 1000*9=9000, 8200 < 9000 → Ok (82% skew)
-        // Try: 901 vs 99 → diff=802, total=1000, 8020 < 9000 → Ok
-        // Try: 951 vs 49 → diff=902, total=1000, 9020 > 9000 → Err
-        assert!(check_vault_skew(951, 49).is_err());
-        // Right at boundary: 900 vs 100 → diff=800, total=1000, 8000 < 9000 → Ok
-        assert!(check_vault_skew(900, 100).is_ok());
+        // At exactly 90%: diff=90, total=100 → 900 vs 900 → NOT > → Ok for both
+        assert!(check_vault_skew(95, 5, &Side::Long).is_ok());
+        assert!(check_vault_skew(95, 5, &Side::Short).is_ok());
+        // 951 vs 49 → 95.1% skew → long blocked, short allowed
+        assert!(check_vault_skew(951, 49, &Side::Long).is_err());
+        assert!(check_vault_skew(951, 49, &Side::Short).is_ok());
+        // 900 vs 100 → 80% skew → both allowed
+        assert!(check_vault_skew(900, 100, &Side::Long).is_ok());
+        assert!(check_vault_skew(900, 100, &Side::Short).is_ok());
     }
 
     // ===== New tests: spread tier boundaries =====
@@ -386,9 +421,16 @@ mod proptests {
             short_oi in 0u64..=1_000_000_000u64,
         ) {
             let spread = calculate_min_spread(long_oi, short_oi);
-            let skew_ok = check_vault_skew(long_oi, short_oi).is_ok();
+            // When spread = MAX, the dominant side should be blocked
             if spread == u16::MAX {
-                prop_assert!(!skew_ok);
+                if long_oi >= short_oi {
+                    prop_assert!(check_vault_skew(long_oi, short_oi, &Side::Long).is_err());
+                    // But rebalancing side should be allowed
+                    prop_assert!(check_vault_skew(long_oi, short_oi, &Side::Short).is_ok());
+                } else {
+                    prop_assert!(check_vault_skew(long_oi, short_oi, &Side::Short).is_err());
+                    prop_assert!(check_vault_skew(long_oi, short_oi, &Side::Long).is_ok());
+                }
             }
         }
 
@@ -453,12 +495,13 @@ mod proptests {
         }
 
         #[test]
-        fn vault_skew_symmetric(
+        fn vault_skew_directional_symmetric(
             a in 0u64..=1_000_000_000u64,
             b in 0u64..=1_000_000_000u64,
         ) {
-            let r1 = check_vault_skew(a, b).is_ok();
-            let r2 = check_vault_skew(b, a).is_ok();
+            // Swapping long/short OI and swapping the side should give the same result
+            let r1 = check_vault_skew(a, b, &Side::Long).is_ok();
+            let r2 = check_vault_skew(b, a, &Side::Short).is_ok();
             prop_assert_eq!(r1, r2);
         }
 

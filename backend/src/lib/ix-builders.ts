@@ -22,6 +22,12 @@ function writeU64LE(n: bigint | number | BN): Buffer {
   return b;
 }
 
+function writeI64LE(n: bigint | number): Buffer {
+  const b = Buffer.alloc(8);
+  b.writeBigInt64LE(BigInt(n));
+  return b;
+}
+
 function writeU8(n: number): Buffer {
   return Buffer.from([n & 0xff]);
 }
@@ -30,12 +36,6 @@ function writeU16LE(n: number): Buffer {
   const b = Buffer.alloc(2);
   b.writeUInt16LE(n & 0xffff);
   return b;
-}
-
-function writeVecU8(data: Buffer): Buffer {
-  const len = Buffer.alloc(4);
-  len.writeUInt32LE(data.length);
-  return Buffer.concat([len, data]);
 }
 
 export enum Side {
@@ -56,7 +56,9 @@ export interface UpdateConfigArgs {
   isPaused?: boolean;
   totalUsdcReserve?: bigint;
   psfBalance?: bigint;
-  stressActive?: boolean; // V3: stress circuit breaker flag
+  stressActive?: boolean;
+  totalLongOi?: bigint;
+  totalShortOi?: bigint;
 }
 
 export function buildUpdateConfigIx(args: UpdateConfigArgs): TransactionInstruction {
@@ -76,8 +78,9 @@ export function buildUpdateConfigIx(args: UpdateConfigArgs): TransactionInstruct
     writeU8(args.isPaused !== undefined ? (args.isPaused ? 1 : 0) : NO_CHANGE_BOOL),
     writeU64LE(args.totalUsdcReserve !== undefined ? args.totalUsdcReserve : NO_CHANGE_U64),
     writeU64LE(args.psfBalance !== undefined ? args.psfBalance : NO_CHANGE_U64),
-    // V3: stress_active byte (255 = no change)
     writeU8(args.stressActive !== undefined ? (args.stressActive ? 1 : 0) : NO_CHANGE_BOOL),
+    writeU64LE(args.totalLongOi !== undefined ? args.totalLongOi : NO_CHANGE_U64),
+    writeU64LE(args.totalShortOi !== undefined ? args.totalShortOi : NO_CHANGE_U64),
   ]);
 
   return new TransactionInstruction({
@@ -90,36 +93,20 @@ export function buildUpdateConfigIx(args: UpdateConfigArgs): TransactionInstruct
   });
 }
 
-// ----- atomic_open -----
-
-export interface AccountMetaJson {
-  pubkey: PublicKey;
-  isSigner: boolean;
-  isWritable: boolean;
-}
+// ----- atomic_open (pure margin perps — no USDC borrow) -----
 
 export interface AtomicOpenArgs {
   user: PublicKey;
-  userCollateralAccount: PublicKey; // renamed from userSolAccount
-  userUsdcAccount: PublicKey;
-  collateralVault: PublicKey;       // renamed from solVault
-  usdcReserve: PublicKey;
+  userCollateralAccount: PublicKey;
+  collateralVault: PublicKey;
   feeRecipientAccount: PublicKey;
   pythPriceFeed: PublicKey;
   collateralAmount: bigint;
-  borrowAmount: bigint;
   perpSide: Side;
   leverageBps: number;
-  hedgeAmount: bigint;
   spreadFeeBps: number;
-  jupiterSwapData: Buffer;
-  jupiterRemainingAccounts?: AccountMetaJson[];
-  kaminoBorrowData?: Buffer;
-  kaminoRemainingAccounts?: AccountMetaJson[];
-  // V3: multi-collateral
-  collateralType?: number;          // 0=SOL, 1=JLP, 2=mSOL (default 0)
-  jlpPrice?: bigint;                // JLP price in 6dp (only for type=1)
-  msolFeedAccount?: PublicKey;      // Pyth mSOL feed (only for type=2)
+  collateralType?: number;       // 0=SOL, 1=JLP, 2=mSOL
+  collateralPrice?: bigint;      // JLP/mSOL price 6dp; 0 for SOL
 }
 
 export function buildAtomicOpenIx(args: AtomicOpenArgs): TransactionInstruction {
@@ -131,23 +118,12 @@ export function buildAtomicOpenIx(args: AtomicOpenArgs): TransactionInstruction 
   const data = Buffer.concat([
     discriminator("atomic_open"),
     writeU64LE(args.collateralAmount),
-    writeU64LE(args.borrowAmount),
     writeU8(args.perpSide),
     writeU64LE(args.leverageBps),
-    writeU64LE(args.hedgeAmount),
     writeU16LE(args.spreadFeeBps),
-    writeVecU8(args.jupiterSwapData),
-    writeVecU8(args.kaminoBorrowData ?? Buffer.alloc(0)),
-    // V3 extension: collateral_type + jlp_price
     writeU8(collType),
-    writeU64LE(args.jlpPrice ?? BigInt(0)),
+    writeU64LE(args.collateralPrice ?? BigInt(0)),
   ]);
-
-  // For mSOL: msolFeedAccount goes first in remaining_accounts
-  const extraRemaining: AccountMetaJson[] = [];
-  if (collType === 2 && args.msolFeedAccount) {
-    extraRemaining.push({ pubkey: args.msolFeedAccount, isSigner: false, isWritable: false });
-  }
 
   const keys = [
     { pubkey: args.user, isSigner: true, isWritable: true },
@@ -156,36 +132,25 @@ export function buildAtomicOpenIx(args: AtomicOpenArgs): TransactionInstruction 
     { pubkey: args.pythPriceFeed, isSigner: false, isWritable: false },
     { pubkey: args.userCollateralAccount, isSigner: false, isWritable: true },
     { pubkey: args.collateralVault, isSigner: false, isWritable: true },
-    { pubkey: args.usdcReserve, isSigner: false, isWritable: true },
-    { pubkey: args.userUsdcAccount, isSigner: false, isWritable: true },
     { pubkey: args.feeRecipientAccount, isSigner: false, isWritable: true },
     { pubkey: programAuthority, isSigner: false, isWritable: false },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    // mSOL Pyth feed (if applicable), then Kamino, then Jupiter
-    ...extraRemaining,
-    ...(args.kaminoRemainingAccounts ?? []),
-    ...(args.jupiterRemainingAccounts ?? []),
   ];
 
   return new TransactionInstruction({ programId, keys, data });
 }
 
-// ----- atomic_close -----
+// ----- atomic_close (PnL settlement + partial close) -----
 
 export interface AtomicCloseArgs {
   user: PublicKey;
-  userCollateralAccount: PublicKey;  // renamed from userSolAccount
-  userUsdcAccount: PublicKey;
-  collateralVault: PublicKey;        // renamed from solVault
-  usdcReserve: PublicKey;
+  userCollateralAccount: PublicKey;
+  collateralVault: PublicKey;
   feeRecipientAccount: PublicKey;
   pythPriceFeed: PublicKey;
-  kaminoRepayData?: Buffer;
-  kaminoRemainingAccounts?: AccountMetaJson[];
-  // V3: collateral price for JLP settlement (0 = use oracle)
-  collateralPrice?: bigint;
-  msolFeedAccount?: PublicKey;       // Pyth mSOL feed (only for mSOL collateral)
+  closeBps?: number;             // 10000 = full close (default), 5000 = 50%
+  collateralPrice?: bigint;      // JLP/mSOL price 6dp; 0 for SOL
 }
 
 export function buildAtomicCloseIx(args: AtomicCloseArgs): TransactionInstruction {
@@ -195,16 +160,9 @@ export function buildAtomicCloseIx(args: AtomicCloseArgs): TransactionInstructio
 
   const data = Buffer.concat([
     discriminator("atomic_close"),
-    writeVecU8(args.kaminoRepayData ?? Buffer.alloc(0)),
-    // V3 extension: collateral_price_6dp
+    writeU16LE(args.closeBps ?? 10000),
     writeU64LE(args.collateralPrice ?? BigInt(0)),
   ]);
-
-  // For mSOL: feed account in remaining_accounts before Kamino
-  const extraRemaining: AccountMetaJson[] = [];
-  if (args.msolFeedAccount) {
-    extraRemaining.push({ pubkey: args.msolFeedAccount, isSigner: false, isWritable: false });
-  }
 
   return new TransactionInstruction({
     programId,
@@ -213,15 +171,11 @@ export function buildAtomicCloseIx(args: AtomicCloseArgs): TransactionInstructio
       { pubkey: config, isSigner: false, isWritable: true },
       { pubkey: position, isSigner: false, isWritable: true },
       { pubkey: args.pythPriceFeed, isSigner: false, isWritable: false },
-      { pubkey: args.userUsdcAccount, isSigner: false, isWritable: true },
-      { pubkey: args.usdcReserve, isSigner: false, isWritable: true },
       { pubkey: args.collateralVault, isSigner: false, isWritable: true },
       { pubkey: args.userCollateralAccount, isSigner: false, isWritable: true },
       { pubkey: args.feeRecipientAccount, isSigner: false, isWritable: true },
       { pubkey: programAuthority, isSigner: false, isWritable: false },
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      ...extraRemaining,
-      ...(args.kaminoRemainingAccounts ?? []),
     ],
     data,
   });
@@ -232,15 +186,11 @@ export function buildAtomicCloseIx(args: AtomicCloseArgs): TransactionInstructio
 export function buildLiquidateIx(args: {
   liquidator: PublicKey;
   positionOwner: PublicKey;
-  liquidatorCollateralAccount: PublicKey;  // renamed: works for any collateral
-  collateralVault: PublicKey;              // renamed: matches position's collateral type
+  liquidatorCollateralAccount: PublicKey;
+  collateralVault: PublicKey;
   feeRecipientCollateralAccount: PublicKey;
   pythPriceFeed: PublicKey;
-  kaminoRepayData?: Buffer;
-  kaminoRemainingAccounts?: AccountMetaJson[];
-  // V3: collateral price for JLP (0 = use oracle)
   collateralPrice?: bigint;
-  msolFeedAccount?: PublicKey;
 }): TransactionInstruction {
   const [config] = findConfigPda();
   const [programAuthority] = findAuthorityPda();
@@ -248,16 +198,8 @@ export function buildLiquidateIx(args: {
 
   const data = Buffer.concat([
     discriminator("liquidate"),
-    writeVecU8(args.kaminoRepayData ?? Buffer.alloc(0)),
-    // V3 extension: collateral_price_6dp
     writeU64LE(args.collateralPrice ?? BigInt(0)),
   ]);
-
-  // For mSOL: feed account in remaining_accounts before Kamino
-  const extraRemaining: AccountMetaJson[] = [];
-  if (args.msolFeedAccount) {
-    extraRemaining.push({ pubkey: args.msolFeedAccount, isSigner: false, isWritable: false });
-  }
 
   return new TransactionInstruction({
     programId,
@@ -271,8 +213,34 @@ export function buildLiquidateIx(args: {
       { pubkey: args.feeRecipientCollateralAccount, isSigner: false, isWritable: true },
       { pubkey: programAuthority, isSigner: false, isWritable: false },
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      ...extraRemaining,
-      ...(args.kaminoRemainingAccounts ?? []),
+    ],
+    data,
+  });
+}
+
+// ----- settle_funding -----
+
+export function buildSettleFundingIx(args: {
+  caller: PublicKey;
+  positionOwner: PublicKey;
+  fundingRateBps: bigint;
+  pythPriceFeed: PublicKey;
+}): TransactionInstruction {
+  const [config] = findConfigPda();
+  const [position] = findPositionPda(args.positionOwner);
+
+  const data = Buffer.concat([
+    discriminator("settle_funding"),
+    writeI64LE(args.fundingRateBps),
+  ]);
+
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: args.caller, isSigner: true, isWritable: true },
+      { pubkey: config, isSigner: false, isWritable: true },
+      { pubkey: position, isSigner: false, isWritable: true },
+      { pubkey: args.pythPriceFeed, isSigner: false, isWritable: false },
     ],
     data,
   });
@@ -329,7 +297,7 @@ export function buildPlaceOrderIx(args: {
   size: bigint;
 }): TransactionInstruction {
   const data = Buffer.concat([
-    discriminator("place_commitment"), // reuses same discriminator slot
+    discriminator("place_commitment"),
     writeU64LE(args.price),
     writeU64LE(args.size),
   ]);

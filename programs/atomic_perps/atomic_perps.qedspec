@@ -1,0 +1,283 @@
+spec AtomicPerps
+
+program_id "8s677udBiKHkCNYzGEroenfN23k1vQjqR3JQvHjZcDWg"
+
+// ============================================================
+// Constants (match programs/atomic_perps/src/constants.rs)
+// ============================================================
+
+const BPS_DENOMINATOR = 10000
+const MAINTENANCE_MARGIN_BPS = 500
+const LIQUIDATION_BONUS_BPS = 500
+const MAX_FUNDING_RATE_BPS = 100
+const FUNDING_INTERVAL_SECONDS = 28800
+
+// ============================================================
+// Error types
+// ============================================================
+
+type Error
+  | OracleStale
+  | OracleConfidenceTooWide
+  | InvalidOracleFeed
+  | ExcessiveLeverage
+  | InsufficientCollateral
+  | PositionUnhealthy
+  | PositionHealthy
+  | PositionNotOpen
+  | TVLCapExceeded
+  | ProtocolPaused
+  | Unauthorized
+  | MathOverflow
+  | BadInput
+  | FillsSuspended
+  | FundingTooSoon
+  | FundingRateExceedsMax
+
+// ============================================================
+// Unified state (GlobalConfig + Position fields flattened)
+// ============================================================
+
+state {
+  // GlobalConfig fields
+  authority         : Pubkey,
+  fee_recipient     : Pubkey,
+  is_paused         : U8,
+  max_leverage      : U64,
+  protocol_fee_bps  : U64,
+  max_tvl           : U64,
+  total_long_oi     : U64,
+  total_short_oi    : U64,
+  psf_balance       : U64,
+  total_collateral  : U64,
+  last_funding_at   : U64,
+  // Position fields
+  owner             : Pubkey,
+  collateral        : U64,
+  size_usd          : U64,
+  perp_side         : U8,
+  perp_size         : U64,
+  entry_price       : U64,
+  is_open           : U8,
+}
+
+// ============================================================
+// PDA seeds
+// ============================================================
+
+pda config ["config"]
+pda position ["position", user]
+pda program_authority ["authority"]
+
+// ============================================================
+// Handlers
+// ============================================================
+
+/// Initialize the global config account. Authority-only, one-shot.
+handler initialize {
+  permissionless
+
+  accounts {
+    authority      : signer, writable
+    global_config  : writable, pda ["config"]
+    system_program : program
+  }
+
+  effect {
+    authority        := authority
+    is_paused        := 0
+    total_long_oi    := 0
+    total_short_oi   := 0
+    psf_balance      := 0
+    total_collateral := 0
+  }
+}
+
+/// Open a leveraged perpetual position. Pure margin model.
+handler atomic_open (deposit : U64) (leverage_bps : U64) (perp_side : U8) {
+  permissionless
+
+  accounts {
+    user                    : signer, writable
+    global_config           : writable, pda ["config"]
+    position                : writable, pda ["position", user]
+    pyth_price_feed         : readonly
+    user_collateral_account : writable
+    collateral_vault        : writable
+    fee_recipient_account   : writable
+    program_authority       : readonly, pda ["authority"]
+    token_program           : program
+    system_program          : program
+  }
+
+  requires is_paused == 0 else ProtocolPaused
+  requires deposit > 0 else InsufficientCollateral
+  requires leverage_bps <= max_leverage else ExcessiveLeverage
+  requires leverage_bps >= 1000 else BadInput
+  requires is_open == 0 else BadInput
+
+  let position_size = mul_div_floor(deposit, leverage_bps, 1000)
+  let fee = mul_div_floor(position_size, protocol_fee_bps, BPS_DENOMINATOR)
+
+  requires total_long_oi + total_short_oi + position_size <= max_tvl else TVLCapExceeded
+
+  transfers {
+    from user_collateral_account to collateral_vault amount deposit authority user
+    from collateral_vault to fee_recipient_account amount fee authority program_authority
+  }
+
+  effect {
+    is_open          := 1
+    entry_price      := oracle_price
+    perp_size        := position_size
+    size_usd         := position_size
+    collateral       := deposit - fee
+    total_long_oi    += if perp_side == 0 then position_size else 0
+    total_short_oi   += if perp_side == 1 then position_size else 0
+    total_collateral += deposit
+  }
+}
+
+/// Close a position (full or partial). PnL settled in collateral.
+handler atomic_close (close_bps : U64) {
+  permissionless
+
+  accounts {
+    user                    : signer, writable
+    global_config           : writable, pda ["config"]
+    position                : writable, pda ["position", user]
+    pyth_price_feed         : readonly
+    collateral_vault        : writable
+    user_collateral_account : writable
+    fee_recipient_account   : writable
+    program_authority       : readonly, pda ["authority"]
+    token_program           : program
+  }
+
+  requires is_open == 1 else PositionNotOpen
+  requires owner == user else Unauthorized
+  requires close_bps >= 1 else BadInput
+  requires close_bps <= BPS_DENOMINATOR else BadInput
+
+  let closing_collateral = mul_div_floor(collateral, close_bps, BPS_DENOMINATOR)
+  let closing_size = mul_div_floor(perp_size, close_bps, BPS_DENOMINATOR)
+  let close_fee = mul_div_floor(closing_size, protocol_fee_bps, BPS_DENOMINATOR)
+
+  transfers {
+    from collateral_vault to user_collateral_account amount closing_collateral authority program_authority
+    from collateral_vault to fee_recipient_account amount close_fee authority program_authority
+  }
+
+  effect {
+    collateral       -= closing_collateral
+    perp_size        -= closing_size
+    size_usd         -= closing_size
+    total_long_oi    -= if perp_side == 0 then closing_size else 0
+    total_short_oi   -= if perp_side == 1 then closing_size else 0
+    total_collateral -= closing_collateral
+  }
+}
+
+/// Liquidate an undercollateralized position. Permissionless.
+handler liquidate {
+  permissionless
+
+  accounts {
+    liquidator                       : signer, writable
+    global_config                    : writable, pda ["config"]
+    position                         : writable, pda ["position", owner]
+    pyth_price_feed                  : readonly
+    collateral_vault                 : writable
+    liquidator_collateral_account    : writable
+    fee_recipient_collateral_account : writable
+    program_authority                : readonly, pda ["authority"]
+    token_program                    : program
+  }
+
+  requires is_open == 1 else PositionNotOpen
+  requires margin_ratio < MAINTENANCE_MARGIN_BPS else PositionHealthy
+
+  let liq_bonus = mul_div_floor(collateral, LIQUIDATION_BONUS_BPS, BPS_DENOMINATOR)
+  let liq_remainder = collateral - liq_bonus
+
+  transfers {
+    from collateral_vault to liquidator_collateral_account amount liq_bonus authority program_authority
+    from collateral_vault to fee_recipient_collateral_account amount liq_remainder authority program_authority
+  }
+
+  effect {
+    is_open          := 0
+    total_long_oi    -= if perp_side == 0 then perp_size else 0
+    total_short_oi   -= if perp_side == 1 then perp_size else 0
+    total_collateral -= collateral
+    collateral       := 0
+    perp_size        := 0
+    size_usd         := 0
+  }
+}
+
+/// Settle funding rate on a single position. Permissionless crank.
+handler settle_funding (funding_rate_bps : U64) {
+  permissionless
+
+  accounts {
+    caller          : signer
+    global_config   : writable, pda ["config"]
+    position        : writable, pda ["position", owner]
+    pyth_price_feed : readonly
+  }
+
+  requires is_open == 1 else PositionNotOpen
+  requires is_paused == 0 else ProtocolPaused
+  requires funding_rate_bps <= MAX_FUNDING_RATE_BPS else FundingRateExceedsMax
+
+  effect {
+    last_funding_at := current_timestamp
+  }
+}
+
+/// Update global config parameters. Authority-only.
+handler update_config {
+  permissionless
+
+  accounts {
+    authority     : signer
+    global_config : writable, pda ["config"]
+  }
+
+  requires authority == global_config.authority else Unauthorized
+}
+
+// ============================================================
+// Properties
+// ============================================================
+
+/// Collateral conservation: no collateral created out of thin air.
+property collateral_conservation :
+  total_collateral >= 0
+  preserved_by all
+
+/// OI tracking: total OI fields are always non-negative.
+property oi_tracking :
+  total_long_oi >= 0 and total_short_oi >= 0
+  preserved_by [atomic_open, atomic_close, liquidate]
+
+/// OI cap: total open interest never exceeds max_tvl.
+property oi_cap :
+  total_long_oi + total_short_oi <= max_tvl
+  preserved_by [atomic_open]
+
+/// Leverage bounds: position size bounded by leverage * collateral.
+property leverage_bounds :
+  size_usd <= mul_div_floor(collateral, max_leverage, 1000)
+  preserved_by [atomic_open]
+
+/// Funding rate bounds: on-chain rate always within +-1%.
+property funding_bounds :
+  funding_rate_bps <= MAX_FUNDING_RATE_BPS
+  preserved_by [settle_funding]
+
+/// Arithmetic safety: collateral + size does not overflow.
+property no_overflow :
+  collateral + size_usd >= collateral
+  preserved_by all

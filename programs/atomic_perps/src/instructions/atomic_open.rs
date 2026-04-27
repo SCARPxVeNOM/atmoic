@@ -10,66 +10,42 @@ use crate::state::{Position, Side};
 use crate::errors::AtomicPerpsError;
 use crate::constants::*;
 use crate::ensure;
-use crate::utils::oracle::{validate_and_get_price, validate_jlp_price};
+use crate::utils::oracle::{validate_and_get_price, validate_jlp_price, validate_msol_price};
 use crate::utils::math::{
-    apply_fee, apply_haircut, calculate_min_spread,
-    calculate_position_size, check_vault_skew, checked_mul_div, token_to_usd,
+    apply_haircut, calculate_notional, check_vault_skew,
+    checked_mul_div, token_to_usd,
+    calculate_min_spread,
 };
 use crate::utils::token::{spl_transfer, spl_transfer_signed};
 use crate::utils::account::{create_pda_account, load_config, load_position, save_config, save_position};
 use crate::events::emit_position_opened;
-#[cfg(feature = "kamino-cpi")]
-use crate::utils::cpi::kamino::cpi_borrow;
-use crate::utils::cpi::jupiter::cpi_swap;
 use crate::constants::is_allowed_feed;
 
 pub struct AtomicOpenParams {
     pub collateral_amount: u64,
-    pub borrow_amount: u64,
     pub perp_side: Side,
-    pub leverage_bps: u64,
-    pub hedge_amount: u64,
+    pub leverage_bps: u64,       // 1000=1x, 5000=5x, 10000=10x
     pub spread_fee_bps: u16,
-    pub jupiter_swap_data: Vec<u8>,
-    pub kamino_borrow_data: Vec<u8>,
-    // V3: multi-collateral fields (backward-compatible — default SOL)
-    pub collateral_type: u8,    // 0=SOL, 1=JLP, 2=mSOL
-    pub jlp_price_6dp: u64,     // only meaningful when collateral_type=1
+    pub collateral_type: u8,     // 0=SOL, 1=JLP, 2=mSOL
+    pub collateral_price_6dp: u64, // JLP/mSOL price; 0 = use oracle
 }
 
 impl AtomicOpenParams {
     fn deserialize(data: &[u8]) -> Option<Self> {
-        if data.len() < 35 { return None; } // 5*u64(8) + side(1) + spread(2) + 2*vec_header(4)
+        // u64(8) + u8(1) + u64(8) + u16(2) + u8(1) + u64(8) = 28 bytes
+        if data.len() < 28 { return None; }
         let mut o = 0;
         let u = |d: &[u8], o: &mut usize| -> u64 {
             let v = u64::from_le_bytes(d[*o..*o+8].try_into().unwrap()); *o += 8; v
         };
         let collateral_amount = u(data, &mut o);
-        let borrow_amount = u(data, &mut o);
         let perp_side = Side::from_u8(data[o])?; o += 1;
         let leverage_bps = u(data, &mut o);
-        let hedge_amount = u(data, &mut o);
-        // spread_fee_bps: u16 LE (2 bytes) — backward-compatible default 5 if data too short
-        let spread_fee_bps = if o + 2 <= data.len() {
-            let v = u16::from_le_bytes(data[o..o+2].try_into().unwrap()); o += 2; v
-        } else {
-            5 // default minimum spread
-        };
-        // Vec<u8>: 4-byte LE length + data
-        if o + 4 > data.len() { return None; }
-        let jlen = u32::from_le_bytes(data[o..o+4].try_into().unwrap()) as usize; o += 4;
-        if o + jlen > data.len() { return None; }
-        let jupiter_swap_data = data[o..o+jlen].to_vec(); o += jlen;
-        if o + 4 > data.len() { return None; }
-        let klen = u32::from_le_bytes(data[o..o+4].try_into().unwrap()) as usize; o += 4;
-        if o + klen > data.len() { return None; }
-        let kamino_borrow_data = data[o..o+klen].to_vec(); o += klen;
+        let spread_fee_bps = u16::from_le_bytes(data[o..o+2].try_into().unwrap()); o += 2;
+        let collateral_type = data[o]; o += 1;
+        let collateral_price_6dp = u(data, &mut o);
 
-        // V3 extension: collateral_type(1) + jlp_price_6dp(8) — default 0 if absent
-        let collateral_type = if o < data.len() { let v = data[o]; o += 1; v } else { 0 };
-        let jlp_price_6dp = if o + 8 <= data.len() { u(data, &mut o) } else { 0 };
-
-        Some(Self { collateral_amount, borrow_amount, perp_side, leverage_bps, hedge_amount, spread_fee_bps, jupiter_swap_data, kamino_borrow_data, collateral_type, jlp_price_6dp })
+        Some(Self { collateral_amount, perp_side, leverage_bps, spread_fee_bps, collateral_type, collateral_price_6dp })
     }
 }
 
@@ -88,14 +64,10 @@ pub fn process(
     let pyth_price_feed = next_account_info(iter)?;
     let user_collateral_account = next_account_info(iter)?;  // index 4
     let collateral_vault = next_account_info(iter)?;          // index 5
-    let usdc_reserve = next_account_info(iter)?;
-    let user_usdc_account = next_account_info(iter)?;
-    let fee_recipient_account = next_account_info(iter)?;
+    let fee_recipient_account = next_account_info(iter)?;     // index 6
     let program_authority = next_account_info(iter)?;
     let token_program = next_account_info(iter)?;
     let system_program = next_account_info(iter)?;
-    // remaining_accounts are everything after index 11
-    let remaining_accounts = &accounts[12..];
 
     ensure!(user.is_signer, AtomicPerpsError::Unauthorized);
 
@@ -116,12 +88,10 @@ pub fn process(
     // -------- 1. Input validation --------
     ensure!(!config.is_paused, AtomicPerpsError::ProtocolPaused);
     ensure!(params.collateral_amount > 0, AtomicPerpsError::InsufficientCollateral);
-    ensure!(params.borrow_amount > 0, AtomicPerpsError::InsufficientCollateral);
+    ensure!(params.leverage_bps >= 1_000, AtomicPerpsError::BadInput); // min 1x
     ensure!(params.leverage_bps <= config.max_leverage, AtomicPerpsError::ExcessiveLeverage);
-    ensure!(params.hedge_amount <= params.borrow_amount, AtomicPerpsError::InsufficientCollateral);
 
     ensure!(is_allowed_feed(pyth_price_feed.key), AtomicPerpsError::InvalidOracleFeed);
-    ensure!(*usdc_reserve.key == config.usdc_reserve, AtomicPerpsError::BadInput);
 
     // -------- 1a. Determine collateral config from collateral_type --------
     let (coll_mint, coll_decimals, haircut_bps, expected_vault, is_correlated) = match params.collateral_type {
@@ -146,8 +116,8 @@ pub fn process(
         return Err(AtomicPerpsError::StressActive.into());
     }
 
-    // -------- 1c. Dynamic spread check (M-2) — rejects if skew >90% --------
-    check_vault_skew(config.total_long_oi, config.total_short_oi)?;
+    // -------- 1c. Directional skew check (M-2) — blocks only skew-increasing fills >90% --------
+    check_vault_skew(config.total_long_oi, config.total_short_oi, &params.perp_side)?;
 
     // -------- 1d. Spread fee enforcement — caller must pay at least the min spread --------
     let min_spread = calculate_min_spread(config.total_long_oi, config.total_short_oi);
@@ -158,38 +128,44 @@ pub fn process(
     let (sol_price_6dp, _conf) = validate_and_get_price(pyth_price_feed, &clock)?;
 
     // Get collateral price (may differ from SOL for JLP/mSOL)
-    let mut extra_remaining_offset: usize = 0;
     let collateral_price_6dp = match params.collateral_type {
         0 => sol_price_6dp,
         1 => {
-            // JLP: price passed in instruction data, validated against SOL bounds
-            validate_jlp_price(params.jlp_price_6dp, sol_price_6dp)?;
-            params.jlp_price_6dp
+            validate_jlp_price(params.collateral_price_6dp, sol_price_6dp)?;
+            params.collateral_price_6dp
         }
         2 => {
-            // mSOL: read from Pyth mSOL feed in remaining_accounts[0]
-            ensure!(!remaining_accounts.is_empty(), AtomicPerpsError::BadInput);
-            let msol_feed = &remaining_accounts[0];
-            ensure!(*msol_feed.key == config.pyth_msol_feed, AtomicPerpsError::InvalidOracleFeed);
-            extra_remaining_offset = 1;
-            let (msol_price, _) = crate::utils::oracle::validate_and_get_price_for_feed(
-                msol_feed, &clock, &PYTH_MSOL_USD_FEED_ID,
-            )?;
-            msol_price
+            validate_msol_price(params.collateral_price_6dp, sol_price_6dp)?;
+            params.collateral_price_6dp
         }
         _ => unreachable!(),
     };
 
-    // Apply haircut to collateral value
+    // -------- 3. Compute notional and fee --------
+    // Collateral value in USD (raw, before haircut)
     let raw_collateral_usd = token_to_usd(params.collateral_amount, collateral_price_6dp, coll_decimals)?;
-    let collateral_usd = apply_haircut(raw_collateral_usd, haircut_bps)?;
 
-    // -------- 2b. Correlated cap check --------
+    // Notional = collateral_usd × leverage
+    let notional_usd = calculate_notional(raw_collateral_usd, params.leverage_bps)?;
+
+    // Fee: charged on notional, converted to collateral tokens
+    let total_fee_bps = config.protocol_fee_bps.saturating_add(params.spread_fee_bps as u64);
+    let fee_usd = checked_mul_div(notional_usd, total_fee_bps, BPS_DENOMINATOR)?;
+    let pow = 10u64.checked_pow(coll_decimals as u32).ok_or(AtomicPerpsError::MathOverflow)?;
+    let fee_in_collateral = checked_mul_div(fee_usd, pow, collateral_price_6dp.max(1))?;
+
+    // Net collateral after fee
+    let net_collateral = params.collateral_amount
+        .checked_sub(fee_in_collateral)
+        .ok_or(AtomicPerpsError::InsufficientCollateral)?;
+    ensure!(net_collateral > 0, AtomicPerpsError::InsufficientCollateral);
+
+    // -------- 3b. Correlated cap check --------
     if is_correlated {
         let new_corr = config.total_correlated_collateral.saturating_add(raw_collateral_usd);
         let new_total = config.total_collateral.saturating_add(raw_collateral_usd);
         if new_total > 0 {
-            let corr_pct_bps = crate::utils::math::checked_mul_div(new_corr, BPS_DENOMINATOR, new_total)?;
+            let corr_pct_bps = checked_mul_div(new_corr, BPS_DENOMINATOR, new_total)?;
             if corr_pct_bps > CORRELATED_CAP_BPS {
                 crate::events::emit_correlated_cap_hit(user.key, corr_pct_bps, CORRELATED_CAP_BPS);
                 return Err(AtomicPerpsError::CorrelatedCapExceeded.into());
@@ -197,31 +173,18 @@ pub fn process(
         }
     }
 
-    let implied_leverage_bps = crate::utils::math::checked_mul_div(
-        params.borrow_amount, 1_000, collateral_usd.max(1),
-    )?;
-    ensure!(implied_leverage_bps <= config.max_leverage, AtomicPerpsError::ExcessiveLeverage);
-
-    // -------- 3. TVL checks --------
-    let new_total_borrowed = config.total_usdc_borrowed
-        .checked_add(params.borrow_amount)
-        .ok_or(AtomicPerpsError::MathOverflow)?;
-    ensure!(new_total_borrowed <= config.total_usdc_reserve, AtomicPerpsError::InsufficientCollateral);
-    ensure!(new_total_borrowed <= config.max_tvl, AtomicPerpsError::TVLCapExceeded);
-
-    // -------- 3b. OI hard cap: total OI must not exceed 80% of reserve (F-03 R-2) --------
-    let preview_size = calculate_position_size(params.borrow_amount, params.leverage_bps)?;
+    // -------- 3c. OI hard cap: total OI must not exceed max_tvl --------
     let new_total_oi = match params.perp_side {
-        Side::Long => config.total_long_oi.saturating_add(preview_size)
+        Side::Long => config.total_long_oi.saturating_add(notional_usd)
             .saturating_add(config.total_short_oi),
         Side::Short => config.total_long_oi
-            .saturating_add(config.total_short_oi.saturating_add(preview_size)),
+            .saturating_add(config.total_short_oi.saturating_add(notional_usd)),
     };
-    let oi_cap = config.total_usdc_reserve * OI_CAP_PCT / 100;
-    ensure!(new_total_oi <= oi_cap, AtomicPerpsError::TVLCapExceeded);
+    ensure!(new_total_oi <= config.max_tvl, AtomicPerpsError::TVLCapExceeded);
 
-    // -------- 3c. PSF health check — warn if balance < 5% of reserve (F-02) --------
-    let min_psf = config.total_usdc_reserve / 20;
+    // -------- 3d. PSF health check — warn if balance < 5% of total collateral (F-02) --------
+    let total_collateral_after = config.total_collateral.saturating_add(raw_collateral_usd);
+    let min_psf = total_collateral_after / 20;
     if config.psf_balance < min_psf {
         crate::events::emit_psf_low(config.psf_balance, min_psf);
     }
@@ -229,56 +192,25 @@ pub fn process(
     // -------- 4. Collateral: user -> collateral_vault --------
     spl_transfer(token_program, user_collateral_account, collateral_vault, user, params.collateral_amount)?;
 
-    // -------- 5. Fee + borrow --------
-    let total_fee_bps = config.protocol_fee_bps.saturating_add(params.spread_fee_bps as u64);
-    let (user_recv_amount, fee_amount) = apply_fee(params.borrow_amount, total_fee_bps)?;
-
+    // -------- 5. Fee: vault -> fee_recipient (90%), PSF accrual (10%) --------
     let authority_bump = config.program_authority_bump;
     let authority_seeds: &[&[u8]] = &[AUTHORITY_SEED, &[authority_bump]];
     let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
 
-    spl_transfer_signed(token_program, usdc_reserve, user_usdc_account, program_authority, user_recv_amount, signer_seeds)?;
-
-    // PSF accrual: 10% of fee stays in reserve, 90% to fee_recipient (F-02 R-3)
-    let psf_portion = fee_amount / 10;
-    let recipient_fee = fee_amount.saturating_sub(psf_portion);
-
-    if recipient_fee > 0 {
-        spl_transfer_signed(token_program, usdc_reserve, fee_recipient_account, program_authority, recipient_fee, signer_seeds)?;
+    let psf_portion_coll = fee_in_collateral / 10;
+    let recipient_fee_coll = fee_in_collateral.saturating_sub(psf_portion_coll);
+    if recipient_fee_coll > 0 {
+        spl_transfer_signed(token_program, collateral_vault, fee_recipient_account, program_authority, recipient_fee_coll, signer_seeds)?;
     }
-    config.psf_balance = config.psf_balance.saturating_add(psf_portion);
+    // PSF accrual: track in USD equivalent (accounting only, no token transfer)
+    let psf_usd = fee_usd / 10;
+    config.psf_balance = config.psf_balance.saturating_add(psf_usd);
 
-    // -------- 6. Optional Kamino CPI --------
-    let cpi_remaining = &remaining_accounts[extra_remaining_offset..];
-    #[allow(unused_mut)]
-    let mut kamino_acct_count: usize = 0;
-    #[cfg(feature = "kamino-cpi")]
-    if !params.kamino_borrow_data.is_empty() {
-        ensure!(cpi_remaining.len() >= 2, AtomicPerpsError::BadInput);
-        let kamino_program = &cpi_remaining[0];
-        let borrow_accounts = &cpi_remaining[1..];
-        kamino_acct_count = 1 + borrow_accounts.len();
-        cpi_borrow(kamino_program, borrow_accounts, &params.kamino_borrow_data)?;
-    }
-
-    // -------- 7. Optional Jupiter hedge (runs AFTER kamino, not exclusive) --------
-    if params.hedge_amount > 0 && !params.jupiter_swap_data.is_empty() {
-        let jupiter_accounts = &cpi_remaining[kamino_acct_count..];
-        ensure!(jupiter_accounts.len() >= 2, AtomicPerpsError::BadInput);
-        let jupiter_program = &jupiter_accounts[0];
-        let swap_accounts = &jupiter_accounts[1..];
-        cpi_swap(jupiter_program, swap_accounts, &params.jupiter_swap_data)?;
-    }
-
-    // -------- 8. Create or reuse position account --------
-    let perp_size = calculate_position_size(params.borrow_amount, params.leverage_bps)?;
+    // -------- 6. Create or reuse position account --------
     let now = Clock::get()?.unix_timestamp;
-
     let user_key = *user.key;
     let pos_seeds: &[&[u8]] = &[POSITION_SEED, user_key.as_ref(), &[position_bump]];
 
-    // If position PDA already exists (from a previous closed position), reuse it.
-    // Otherwise create a new one.
     if position_ai.data_len() == 0 {
         create_pda_account(
             user,
@@ -289,7 +221,6 @@ pub fn process(
             pos_seeds,
         )?;
     } else {
-        // Reuse existing account — verify it's a closed position
         let existing = load_position(position_ai)?;
         ensure!(!existing.is_open, AtomicPerpsError::BadInput);
     }
@@ -299,41 +230,36 @@ pub fn process(
         perp_market: *pyth_price_feed.key,
         collateral_mint: coll_mint,
         kamino_obligation: Pubkey::default(),
-        collateral_amount: params.collateral_amount,
-        borrow_amount_usdc: params.borrow_amount,
+        collateral_amount: net_collateral,
+        borrow_amount_usdc: notional_usd,  // REPURPOSED: stores notional size in USD 6dp
         perp_side: params.perp_side,
-        perp_size,
+        perp_size: notional_usd,
         entry_price: sol_price_6dp,
         opened_at: now,
-        hedge_amount: params.hedge_amount,
+        hedge_amount: 0,
         collateral_entry_price: collateral_price_6dp,
         is_open: true,
         bump: position_bump,
     };
 
-    // -------- 9. Post-state initial margin check --------
-    // Perps margin model: collateral must be >= borrow / max_leverage.
-    // At 5x (leverage_bps=5000): min_collateral = borrow * 1000 / 5000 = borrow / 5
-    // At 10x (leverage_bps=10000): min_collateral = borrow * 1000 / 10000 = borrow / 10
+    // -------- 7. Post-state margin check --------
+    // Margin ratio = collateral_usd / notional must be >= maintenance margin
     let post_collateral_usd = apply_haircut(
-        token_to_usd(position.collateral_amount, collateral_price_6dp, coll_decimals)?,
+        token_to_usd(net_collateral, collateral_price_6dp, coll_decimals)?,
         haircut_bps,
     )?;
-    let min_collateral = checked_mul_div(
-        position.borrow_amount_usdc, 1_000, config.max_leverage,
-    )?;
-    ensure!(post_collateral_usd >= min_collateral, AtomicPerpsError::PositionUnhealthy);
+    let margin_ratio_bps = checked_mul_div(post_collateral_usd, BPS_DENOMINATOR, notional_usd)?;
+    ensure!(margin_ratio_bps >= MAINTENANCE_MARGIN_BPS, AtomicPerpsError::PositionUnhealthy);
 
     save_position(position_ai, &position)?;
 
-    // -------- 10. Update global accounting + OI --------
-    config.total_usdc_borrowed = new_total_borrowed;
+    // -------- 8. Update global accounting + OI --------
     match position.perp_side {
-        crate::state::Side::Long => {
-            config.total_long_oi = config.total_long_oi.saturating_add(perp_size);
+        Side::Long => {
+            config.total_long_oi = config.total_long_oi.saturating_add(notional_usd);
         }
-        crate::state::Side::Short => {
-            config.total_short_oi = config.total_short_oi.saturating_add(perp_size);
+        Side::Short => {
+            config.total_short_oi = config.total_short_oi.saturating_add(notional_usd);
         }
     }
 
@@ -348,7 +274,7 @@ pub fn process(
     emit_position_opened(
         &position.owner,
         position.collateral_amount,
-        position.borrow_amount_usdc,
+        notional_usd,
         position.perp_side as u8,
         position.entry_price,
         params.leverage_bps,

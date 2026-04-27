@@ -70,6 +70,15 @@ pub fn process(
         if new_stress != 255 { config.stress_active = new_stress != 0; }
     }
 
+    // Optional: total_long_oi + total_short_oi (offset 114, 2×u64 = 16 bytes)
+    // Allows authority to reset OI counters on mainnet (e.g. after orphaned positions)
+    if data.len() >= 130 {
+        let new_long_oi = u64::from_le_bytes(data[114..122].try_into().unwrap());
+        let new_short_oi = u64::from_le_bytes(data[122..130].try_into().unwrap());
+        if new_long_oi != NO_CHANGE_U64 { config.total_long_oi = new_long_oi; }
+        if new_short_oi != NO_CHANGE_U64 { config.total_short_oi = new_short_oi; }
+    }
+
     save_config(global_config_ai, &config)?;
     Ok(())
 }

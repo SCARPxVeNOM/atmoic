@@ -9,44 +9,47 @@ interface DisplayPosition {
   side: "Long" | "Short";
   lv: number;
   sizeUsd: number;
-  sizeSol: number;
+  margin: number;
   entry: number;
   mark: number;
   pnl: number;
   pnlPct: number;
-  health: number;
-  hc: string;
-  hedgeUsd: number;
+  marginRatio: number;
+  marginCol: string;
 }
 
 function toDisplay(p: PositionView, h: HealthView | null, solPrice: number): DisplayPosition {
   const collSol = Number(p.collateralAmount) / 1e9;
-  const borrowUsdc = Number(p.borrowAmountUsdc) / 1e6;
+  const notionalUsd = Number(p.borrowAmountUsdc) / 1e6; // repurposed as notional
   const entry = Number(p.entryPrice) / 1e6;
   const side: "Long" | "Short" = p.perpSide === 0 ? "Long" : "Short";
-  const perpSizeSol = Number(p.perpSize) / 1e9;
-  const sizeUsd = perpSizeSol * solPrice;
-  const lv = borrowUsdc > 0 ? Math.round((collSol * solPrice + borrowUsdc) / (collSol * solPrice)) : 1;
-  const pnlRaw = (solPrice - entry) * perpSizeSol * (side === "Long" ? 1 : -1);
-  const pnlPct = collSol * solPrice > 0 ? (pnlRaw / (collSol * solPrice)) * 100 : 0;
-  const healthBps = h ? Number(h.healthFactorBps) : 10000;
-  const health = healthBps / 10000;
-  const hc = health > 1.3 ? "#3fb68b" : health > 1.0 ? "#d29922" : "#ff5353";
-  const hedgeUsdc = Number(p.hedgeAmount) / 1e6;
+  const margin = collSol * solPrice;
+  const lv = margin > 0 ? Math.round(notionalUsd / margin) : 1;
+
+  // PnL = (exit - entry) / entry * notional (for long, negate for short)
+  const priceDelta = side === "Long" ? solPrice - entry : entry - solPrice;
+  const pnlRaw = entry > 0 ? (priceDelta / entry) * notionalUsd : 0;
+  const pnlPct = margin > 0 ? (pnlRaw / margin) * 100 : 0;
+
+  // Margin ratio from API or computed locally
+  const marginRatioBps = h ? Number(h.healthFactorBps) : (notionalUsd > 0 ? (margin / notionalUsd) * 10000 : 99999);
+  const marginRatio = marginRatioBps / 10000;
+  // Color: >15% green, >8% yellow, <8% red (5% = liquidation)
+  const marginPct = marginRatio * 100;
+  const marginCol = marginPct > 15 ? "#3fb68b" : marginPct > 8 ? "#d29922" : "#ff5353";
 
   return {
     market: "SOL-USD",
     side,
     lv,
-    sizeUsd,
-    sizeSol: perpSizeSol,
+    sizeUsd: notionalUsd,
+    margin,
     entry,
     mark: solPrice,
     pnl: pnlRaw,
     pnlPct,
-    health,
-    hc,
-    hedgeUsd: hedgeUsdc,
+    marginRatio,
+    marginCol,
   };
 }
 
@@ -64,6 +67,7 @@ export function PositionsTable({
   const [tab, setTab] = useState("positions");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [closePercent, setClosePercent] = useState(100);
   const accent = accentColor || "#58a6ff";
   const { publicKey, signTransaction } = useWallet();
   const { connection } = useConnection();
@@ -87,10 +91,11 @@ export function PositionsTable({
     setBusy(true);
     setStatus(null);
     try {
+      const closeBps = Math.round(closePercent * 100); // 100% = 10000 bps
       const res = await fetch(`${API_BASE}/build-tx/close`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wallet: publicKey.toBase58(), useKamino: false }),
+        body: JSON.stringify({ wallet: publicKey.toBase58(), closeBps }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? "build failed");
       const data = await res.json();
@@ -115,7 +120,8 @@ export function PositionsTable({
         await connection.confirmTransaction(sig, "confirmed");
         lastSig = sig;
       }
-      setStatus(`Closed: ${lastSig.slice(0, 8)}...`);
+      const label = closePercent < 100 ? `Closed ${closePercent}%` : "Closed";
+      setStatus(`${label}: ${lastSig.slice(0, 8)}...`);
     } catch (e: any) {
       setStatus(e.message ?? String(e));
     } finally {
@@ -160,10 +166,10 @@ export function PositionsTable({
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
                 <tr>
-                  {["Market", "Side", "Lv", "Size", "Entry", "Mark", "PnL", "Hedge", "Health", ""].map(h => (
+                  {["Market", "Side", "Lv", "Size", "Margin", "Entry", "Mark", "PnL", "Margin %", ""].map(h => (
                     <th key={h} style={{
                       padding: "5px 12px", color: "#8b949e", fontWeight: 400,
-                      textAlign: ["Size", "Entry", "Mark", "PnL"].includes(h) ? "right" : "left",
+                      textAlign: ["Size", "Margin", "Entry", "Mark", "PnL"].includes(h) ? "right" : "left",
                       whiteSpace: "nowrap", position: "sticky", top: 0, background: "#0d1117",
                       borderBottom: "1px solid #21262d",
                     }}>{h}</th>
@@ -186,7 +192,9 @@ export function PositionsTable({
                     <td style={{ padding: "8px 12px", fontFamily: "IBM Plex Mono,monospace", color: "#8b949e" }}>{p.lv}x</td>
                     <td style={{ padding: "8px 12px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace" }}>
                       <div style={{ color: "#e6edf3" }}>${p.sizeUsd.toFixed(2)}</div>
-                      <div style={{ fontSize: 10, color: "#8b949e" }}>{p.sizeSol.toFixed(4)} SOL</div>
+                    </td>
+                    <td style={{ padding: "8px 12px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#8b949e" }}>
+                      ${p.margin.toFixed(2)}
                     </td>
                     <td style={{ padding: "8px 12px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>${p.entry.toFixed(2)}</td>
                     <td style={{ padding: "8px 12px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>${p.mark.toFixed(2)}</td>
@@ -199,41 +207,47 @@ export function PositionsTable({
                       </div>
                     </td>
                     <td style={{ padding: "8px 12px" }}>
-                      {p.hedgeUsd > 0 ? (
-                        <span style={{ fontFamily: "IBM Plex Mono,monospace", fontSize: 12, color: "#58a6ff" }}>
-                          ${p.hedgeUsd.toFixed(2)}
-                          <span style={{ fontSize: 10, color: "#8b949e", marginLeft: 4 }}>via Jupiter</span>
-                        </span>
-                      ) : (
-                        <span style={{ fontSize: 11, color: "#484f58" }}>None</span>
-                      )}
+                      <span style={{ fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: p.marginCol }}>
+                        {(p.marginRatio * 100).toFixed(1)}%
+                      </span>
                     </td>
                     <td style={{ padding: "8px 12px" }}>
-                      <span style={{ fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: p.hc }}>{p.health.toFixed(2)}</span>
-                    </td>
-                    <td style={{ padding: "8px 12px" }}>
-                      <button
-                        disabled={busy}
-                        onClick={closePosition}
-                        style={{
-                          padding: "4px 12px", borderRadius: 6, border: "1px solid #30363d",
-                          background: "transparent", color: busy ? "#8b949e" : "#e6edf3", fontSize: 11,
-                          cursor: busy ? "not-allowed" : "pointer", whiteSpace: "nowrap",
-                        }}
-                        onMouseEnter={e => {
-                          if (busy) return;
-                          const t = e.currentTarget;
-                          t.style.background = "#ff535318";
-                          t.style.borderColor = "#ff5353";
-                          t.style.color = "#ff5353";
-                        }}
-                        onMouseLeave={e => {
-                          const t = e.currentTarget;
-                          t.style.background = "transparent";
-                          t.style.borderColor = "#30363d";
-                          t.style.color = "#e6edf3";
-                        }}
-                      >{busy ? "Closing..." : "Close"}</button>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        {/* Partial close: quick percent buttons */}
+                        <div style={{ display: "flex", gap: 2 }}>
+                          {[25, 50, 100].map(pct => (
+                            <button key={pct} onClick={() => setClosePercent(pct)} style={{
+                              padding: "2px 5px", borderRadius: 3, fontSize: 9,
+                              border: `1px solid ${closePercent === pct ? "#ff5353" : "#30363d"}`,
+                              background: closePercent === pct ? "#ff535318" : "transparent",
+                              color: closePercent === pct ? "#ff5353" : "#8b949e",
+                              cursor: "pointer",
+                            }}>{pct}%</button>
+                          ))}
+                        </div>
+                        <button
+                          disabled={busy}
+                          onClick={closePosition}
+                          style={{
+                            padding: "4px 10px", borderRadius: 6, border: "1px solid #30363d",
+                            background: "transparent", color: busy ? "#8b949e" : "#e6edf3", fontSize: 11,
+                            cursor: busy ? "not-allowed" : "pointer", whiteSpace: "nowrap",
+                          }}
+                          onMouseEnter={e => {
+                            if (busy) return;
+                            const t = e.currentTarget;
+                            t.style.background = "#ff535318";
+                            t.style.borderColor = "#ff5353";
+                            t.style.color = "#ff5353";
+                          }}
+                          onMouseLeave={e => {
+                            const t = e.currentTarget;
+                            t.style.background = "transparent";
+                            t.style.borderColor = "#30363d";
+                            t.style.color = "#e6edf3";
+                          }}
+                        >{busy ? "Closing..." : closePercent < 100 ? `Close ${closePercent}%` : "Close"}</button>
+                      </div>
                     </td>
                   </tr>
                 ))}

@@ -35,6 +35,9 @@ export interface GlobalConfigData {
   stressActive: boolean;
   totalCorrelatedCollateral: bigint;
   totalCollateral: bigint;
+  // V4
+  lastFundingAt: bigint;
+  accumulatedFunding: bigint;
 }
 
 export interface PositionData {
@@ -85,6 +88,7 @@ export function decodeGlobalConfig(data: Buffer): GlobalConfigData {
   const r = new Reader(data);
   const V2_SIZE = 8 + 299;
   const V3_SIZE = 8 + 476;
+  const V4_SIZE = 8 + 492;
 
   const base = {
     authority: r.pk(),
@@ -129,7 +133,12 @@ export function decodeGlobalConfig(data: Buffer): GlobalConfigData {
         totalCollateral: 0n,
       };
 
-  return { ...base, ...v2, ...v3 };
+  // V4 fields
+  const v4 = data.length >= V4_SIZE
+    ? { lastFundingAt: r.i64(), accumulatedFunding: r.i64() }
+    : { lastFundingAt: 0n, accumulatedFunding: 0n };
+
+  return { ...base, ...v2, ...v3, ...v4 };
 }
 
 export function decodePosition(data: Buffer): PositionData {

@@ -14,17 +14,26 @@ export interface HealthInput {
 
 export interface HealthReport {
   collateralValueUsdc: bigint;
-  borrowValueUsdc: bigint;
+  /** Notional position size in USD (was borrowValueUsdc in lending model). */
+  notionalUsdc: bigint;
   pnlUsdc: bigint;
+  /** Effective margin = collateral value + unrealized PnL. */
+  effectiveMarginUsdc: bigint;
+  /** Margin ratio in BPS: effective_margin / notional * 10000. */
+  marginRatioBps: bigint;
   healthFactorBps: bigint;
   liquidatable: boolean;
 }
 
+/** Maintenance margin: 5% (500 bps). Matches on-chain MAINTENANCE_MARGIN_BPS. */
+const MAINTENANCE_MARGIN_BPS = 500n;
+
 /**
- * Mirror of `calculate_health_factor` in programs/atomic_perps/src/utils/math.rs.
- * Health factor in BPS: 10_000 = exactly at threshold. <10_000 = liquidatable.
+ * Compute health for a perps position using margin ratio model.
  *
- *   health = (collateral_value * threshold_bps) / (borrow_value + |pnl_loss|) * 10_000 / 10_000
+ * margin_ratio = effective_margin / notional
+ * effective_margin = collateral_value + unrealized_pnl
+ * Liquidatable when margin_ratio < MAINTENANCE_MARGIN_BPS / 10000
  */
 export function computeHealth({
   position,
@@ -50,34 +59,31 @@ export function computeHealth({
 
   // Synthetic perp PnL: (exit - entry) * size / entry, signed by side.
   const entry = position.entryPrice === 0n ? 1n : position.entryPrice;
-  const sizeValue = (position.perpSize * solPrice6dp) / solFactor;
-  const entryValue = (position.perpSize * entry) / solFactor;
-  let pnlUsdc = sizeValue - entryValue;
-  if (position.perpSide === Side.Short) pnlUsdc = -pnlUsdc;
+  const pnlUsdc = (() => {
+    const priceDelta = position.perpSide === Side.Short
+      ? entry - solPrice6dp
+      : solPrice6dp - entry;
+    return (priceDelta * position.perpSize) / entry;
+  })();
 
-  const borrowEffective =
-    pnlUsdc >= 0n
-      ? position.borrowAmountUsdc
-      : position.borrowAmountUsdc + (-pnlUsdc);
+  // Effective margin = collateral value + unrealized PnL
+  const effectiveMarginUsdc = collateralValueUsdc + pnlUsdc;
 
-  if (borrowEffective === 0n) {
-    return {
-      collateralValueUsdc,
-      borrowValueUsdc: position.borrowAmountUsdc,
-      pnlUsdc,
-      healthFactorBps: 2n ** 63n - 1n,
-      liquidatable: false,
-    };
-  }
+  // Notional = borrow_amount_usdc (repurposed as notional in perps model)
+  const notionalUsdc = position.borrowAmountUsdc;
 
-  const healthFactorBps =
-    (collateralValueUsdc * liquidationThresholdBps) / borrowEffective;
+  // Margin ratio in BPS: effective_margin / notional * 10000
+  const marginRatioBps = notionalUsdc === 0n
+    ? 2n ** 63n - 1n
+    : (effectiveMarginUsdc * 10_000n) / notionalUsdc;
 
   return {
     collateralValueUsdc,
-    borrowValueUsdc: position.borrowAmountUsdc,
+    notionalUsdc,
     pnlUsdc,
-    healthFactorBps,
-    liquidatable: healthFactorBps < 10_000n,
+    effectiveMarginUsdc,
+    marginRatioBps,
+    healthFactorBps: marginRatioBps, // alias for backward compat
+    liquidatable: marginRatioBps < MAINTENANCE_MARGIN_BPS,
   };
 }

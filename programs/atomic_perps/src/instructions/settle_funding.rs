@@ -11,6 +11,7 @@ use crate::errors::AtomicPerpsError;
 use crate::constants::*;
 use crate::ensure;
 use crate::utils::oracle::validate_and_get_price;
+use crate::utils::math::{checked_mul_div, get_decimals_for_mint};
 use crate::utils::account::{load_config, save_config, load_position, save_position};
 use crate::events::emit_funding_settled;
 
@@ -70,7 +71,7 @@ pub fn process(
     let elapsed = clock.unix_timestamp.saturating_sub(config.last_funding_at);
     ensure!(elapsed >= FUNDING_INTERVAL_SECONDS, AtomicPerpsError::FundingTooSoon);
 
-    // Validate funding rate within bounds (±1% max)
+    // Validate funding rate within bounds (+-1% max)
     ensure!(
         funding_rate_bps.abs() <= MAX_FUNDING_RATE_BPS,
         AtomicPerpsError::FundingRateExceedsMax
@@ -78,34 +79,42 @@ pub fn process(
 
     // Verify oracle is fresh (validates staleness, confidence)
     ensure!(is_allowed_feed(pyth_price_feed.key), AtomicPerpsError::InvalidOracleFeed);
-    let (_price, _conf) = validate_and_get_price(pyth_price_feed, &clock)?;
+    let (current_price, _conf) = validate_and_get_price(pyth_price_feed, &clock)?;
 
-    // Calculate adjustment: (perp_size * funding_rate_bps) / BPS_DENOMINATOR
-    // Longs pay when rate > 0, shorts pay when rate > 0
+    // Calculate funding adjustment in USD: (perp_size * funding_rate_bps) / BPS_DENOMINATOR
     let perp_size_i = position.perp_size as i128;
-    let adjustment_128 = (perp_size_i * (funding_rate_bps as i128)) / (BPS_DENOMINATOR as i128);
-    let adjustment = adjustment_128 as i64;
+    let adjustment_usd_128 = (perp_size_i * (funding_rate_bps as i128)) / (BPS_DENOMINATOR as i128);
+    let adjustment_usd = adjustment_usd_128 as i64;
 
-    // Apply funding: adjust collateral
-    // If position is long and rate > 0: long pays (collateral decreases)
-    // If position is long and rate < 0: long receives (collateral increases)
-    // If position is short and rate > 0: short receives (collateral increases)
-    // If position is short and rate < 0: short pays (collateral decreases)
-    let effective_adjustment = match position.perp_side {
-        crate::state::Side::Long => -adjustment,  // Longs pay positive funding
-        crate::state::Side::Short => adjustment,   // Shorts receive positive funding
+    // Determine direction: longs pay positive funding, shorts receive it
+    let effective_adjustment_usd = match position.perp_side {
+        crate::state::Side::Long => -adjustment_usd,  // Longs pay positive funding
+        crate::state::Side::Short => adjustment_usd,   // Shorts receive positive funding
     };
 
-    let new_collateral = if effective_adjustment >= 0 {
-        position.collateral_amount.saturating_add(effective_adjustment as u64)
+    // Convert USD adjustment to collateral units using oracle price
+    // adjustment_usd is in 6dp, collateral_amount is in native units (SOL 9dp, JLP 6dp)
+    let coll_decimals = get_decimals_for_mint(&position.collateral_mint);
+    let pow = 10u64.checked_pow(coll_decimals as u32)
+        .ok_or(AtomicPerpsError::MathOverflow)?;
+
+    let adjustment_abs_usd = effective_adjustment_usd.unsigned_abs();
+    let adjustment_collateral = if adjustment_abs_usd == 0 {
+        0u64
     } else {
-        position.collateral_amount.saturating_sub((-effective_adjustment) as u64)
+        checked_mul_div(adjustment_abs_usd, pow, current_price.max(1))?
+    };
+
+    let new_collateral = if effective_adjustment_usd >= 0 {
+        position.collateral_amount.saturating_add(adjustment_collateral)
+    } else {
+        position.collateral_amount.saturating_sub(adjustment_collateral)
     };
 
     emit_funding_settled(
         &position.owner,
         funding_rate_bps,
-        effective_adjustment,
+        effective_adjustment_usd,
         new_collateral,
     );
 

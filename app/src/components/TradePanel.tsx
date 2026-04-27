@@ -2,7 +2,6 @@ import { useState, useMemo, useEffect } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { VersionedTransaction } from "@solana/web3.js";
 import { API_BASE } from "../config";
-import { describeTransaction } from "../lib/tx-description";
 import { usePrivySession } from "../hooks/usePrivySession";
 
 const COLLATERAL = [
@@ -12,6 +11,9 @@ const COLLATERAL = [
 ];
 
 const LV_PRESETS = [2, 3, 5, 10];
+
+/** Maintenance margin: 5%. Matches on-chain MAINTENANCE_MARGIN_BPS = 500. */
+const MAINTENANCE_MARGIN_PCT = 0.05;
 
 function SummaryRow({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
@@ -41,7 +43,6 @@ export function TradePanel({
   const [col, setCol] = useState("SOL");
   const [amount, setAmount] = useState("0.5");
   const [leverage, setLeverage] = useState(5);
-  const [useHedge, setUseHedge] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [confirmDesc, setConfirmDesc] = useState<string | null>(null);
@@ -86,17 +87,46 @@ export function TradePanel({
 
   const summary = useMemo(() => {
     const collUsd = sol * effectivePrice;
-    const posSize = collUsd * leverage;
-    const borrow = collUsd * (leverage - 1);
-    const entryPrice = price * (side === "Long" ? 1.0003 : 0.9997);
     const effColl = collUsd * (1 - cut / 100);
-    const liqPrice = side === "Long"
-      ? entryPrice * (1 - (effColl / posSize) * 0.85)
-      : entryPrice * (1 + (effColl / posSize) * 0.85);
-    const fee = posSize * 0.001;
-    const health = borrow > 0 ? (effColl * 0.85) / borrow : 9.99;
-    const healthCol = health > 1.3 ? "#3fb68b" : health > 1.0 ? "#d29922" : "#ff5353";
-    return { posSize, borrow, entryPrice, liqPrice, fee, health, healthCol };
+    const notional = collUsd * leverage;
+    const fee = notional * 0.001; // 10bps on notional
+    const netCollUsd = collUsd - fee; // after fee deduction
+    const entryPrice = price * (side === "Long" ? 1.0003 : 0.9997);
+
+    // Margin ratio = effective_collateral / notional
+    const marginRatio = notional > 0 ? effColl / notional : 9.99;
+
+    // Liquidation price: when margin ratio hits MAINTENANCE_MARGIN_PCT (5%)
+    // For SOL collateral on SOL-perp (correlated):
+    //   effectiveMargin(P) = collateral_in_sol * P + PnL(P)
+    //   For long: PnL = (P - entry) / entry * notional
+    //   Solve for P where effectiveMargin / notional = 0.05
+    const collSol = sol;
+    const liqPrice = (() => {
+      if (notional <= 0 || entryPrice <= 0) return 0;
+      // effectiveMargin = collSol * P * (1 - cut/100) + (P - entry)/entry * notional (for long)
+      // Set = maintenanceMargin * notional and solve for P
+      const target = MAINTENANCE_MARGIN_PCT * notional;
+      const cutFactor = (1 - cut / 100);
+      if (side === "Long") {
+        // collSol * P * cutFactor + (P - entry) * notional / entry = target
+        // P * (collSol * cutFactor + notional / entry) = target + notional
+        const denom = collSol * cutFactor + notional / entryPrice;
+        return denom > 0 ? (target + notional) / denom : 0;
+      } else {
+        // collSol * P * cutFactor + (entry - P) * notional / entry = target
+        // P * (collSol * cutFactor - notional / entry) = target - notional
+        const denom = collSol * cutFactor - notional / entryPrice;
+        if (denom >= 0) return 0; // can't liquidate (very low leverage short)
+        return (target - notional) / denom;
+      }
+    })();
+
+    // Color coding for margin ratio
+    const marginPct = marginRatio * 100;
+    const healthCol = marginPct > 15 ? "#3fb68b" : marginPct > 8 ? "#d29922" : "#ff5353";
+
+    return { notional, entryPrice, liqPrice, fee, marginRatio, healthCol };
   }, [sol, effectivePrice, price, leverage, side, cut]);
 
   const sideColor = side === "Long" ? "#3fb68b" : "#ff5353";
@@ -115,13 +145,11 @@ export function TradePanel({
     }
     const data = await res.json();
 
-    // Support both single tx (legacy: {tx}) and multi-tx ({txs})
     const b64List: string[] = data.txs ?? [data.tx];
     const txList = b64List.map((b64: string) =>
       VersionedTransaction.deserialize(Buffer.from(b64, "base64"))
     );
 
-    // Sign all transactions at once (Phantom shows one confirmation dialog)
     let signedList: VersionedTransaction[];
     if (signAllTransactions && txList.length > 1) {
       signedList = await signAllTransactions(txList);
@@ -132,7 +160,6 @@ export function TradePanel({
       }
     }
 
-    // Send sequentially, confirm each before the next
     let lastSig = "";
     for (const signed of signedList) {
       const sig = await connection.sendRawTransaction(signed.serialize());
@@ -145,8 +172,8 @@ export function TradePanel({
 
   const requestOpen = () => {
     const collLabel = col === "SOL" ? `${sol} SOL` : `${sol} ${col}`;
-    const borrowUsd = (sol * effectivePrice * (leverage - 1)).toFixed(2);
-    const desc = `Open ${leverage}x ${col} ${side} \u2014 Deposit ${collLabel}, Borrow $${borrowUsd} USDC${col !== "SOL" ? ` (auto-converts SOL \u2192 ${col})` : ""}`;
+    const notionalUsd = summary.notional.toFixed(2);
+    const desc = `Open ${leverage}x ${side} \u2014 Deposit ${collLabel} ($${(sol * effectivePrice).toFixed(2)}) as margin, ${side.toLowerCase()} $${notionalUsd} notional${col !== "SOL" ? ` (auto-converts SOL \u2192 ${col})` : ""}`;
     setConfirmDesc(desc);
   };
 
@@ -155,24 +182,15 @@ export function TradePanel({
     setConfirmDesc(null);
     setBusy(true);
     setStatus(null);
-    setOptimistic({ side, value: sol * effectivePrice * leverage });
+    setOptimistic({ side, value: summary.notional });
     try {
-      // Decimals: SOL=9, mSOL=9, JLP=6, USDC=6
       const decimals = col === "JLP" ? 6 : 9;
       const collAmount = BigInt(Math.floor(sol * 10 ** decimals));
-      const collValueUsd = sol * effectivePrice;
-      const borrow = BigInt(Math.floor(collValueUsd * (leverage - 1) * 1e6));
-      const hedgeAmount = useHedge ? BigInt(Math.floor(Number(borrow) * 0.25)) : BigInt(0);
       const sig = await sendTx("/build-tx/open", {
         wallet: publicKey.toBase58(),
         collateralAmount: collAmount.toString(),
-        borrowAmount: borrow.toString(),
         side,
         leverageBps: leverage * 1000,
-        hedgeAmount: hedgeAmount.toString(),
-        useKamino: false,
-        useJupiterHedge: useHedge,
-        jupiterHedgeAmount: hedgeAmount.toString(),
         collateralType: col,
         market: "SOL-PERP",
       });
@@ -262,7 +280,7 @@ export function TradePanel({
             }}>MAX</button>
           </div>
           <div style={{ fontSize: 11, color: "#8b949e", marginTop: 5, fontFamily: "IBM Plex Mono,monospace" }}>
-            &asymp; ${(sol * price).toFixed(2)}
+            &asymp; ${(sol * effectivePrice).toFixed(2)}
           </div>
         </div>
 
@@ -292,22 +310,6 @@ export function TradePanel({
           }}>{leverage.toFixed(1)}x</div>
         </div>
 
-        {/* Hedge toggle */}
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}>
-          <div onClick={() => setUseHedge(!useHedge)} style={{
-            width: 32, height: 18, borderRadius: 9,
-            background: useHedge ? accent : "#30363d",
-            position: "relative", transition: "background 0.2s", flexShrink: 0,
-          }}>
-            <div style={{
-              position: "absolute", top: 2, left: useHedge ? 16 : 2,
-              width: 14, height: 14, borderRadius: "50%", background: "#fff",
-              transition: "left 0.2s",
-            }} />
-          </div>
-          <span style={{ fontSize: 12, color: "#8b949e" }}>Spot hedge via Jupiter (25%)</span>
-        </label>
-
         {/* Pro mode: Vault risk info */}
         {showProData && vaultRisk && (
           <div style={{
@@ -329,17 +331,17 @@ export function TradePanel({
         <div style={{ background: "#161b22", borderRadius: 10, padding: "12px 14px", border: "1px solid #30363d" }}>
           <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Order Summary</div>
           <div style={{ borderBottom: "1px solid #30363d", paddingBottom: 8, marginBottom: 8 }}>
-            <SummaryRow label="Position Size" value={`$${summary.posSize.toFixed(2)}`} />
-            <SummaryRow label="Borrow" value={`$${summary.borrow.toFixed(2)}`} />
+            <SummaryRow label="Margin" value={`$${(sol * effectivePrice).toFixed(2)}`} />
+            <SummaryRow label="Position Size" value={`$${summary.notional.toFixed(2)}`} />
             <SummaryRow label="Entry Price" value={`$${summary.entryPrice.toFixed(2)}`} />
             <SummaryRow label="Liq. Price" value={`$${summary.liqPrice.toFixed(2)}`} color="#ff5353" />
             <SummaryRow label="Spread" value={vaultRisk ? `${vaultRisk.spreadBps} bps` : "5 bps"} />
             <SummaryRow label="Fee (10bps)" value={`$${summary.fee.toFixed(3)}`} />
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-            <span style={{ color: "#8b949e" }}>Health Factor</span>
+            <span style={{ color: "#8b949e" }}>Margin Ratio</span>
             <span style={{ fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: summary.healthCol }}>
-              {Math.min(summary.health, 9.99).toFixed(2)}
+              {(summary.marginRatio * 100).toFixed(1)}%
               {" "}<span style={{ fontSize: 8 }}>&bull;</span>
             </span>
           </div>
@@ -434,7 +436,7 @@ export function TradePanel({
               {busy ? "Submitting..." : `Open ${side} \u25B8`}
             </button>
             <div style={{ textAlign: "center", fontSize: 11, color: "#8b949e", marginTop: -6 }}>
-              {!publicKey ? "Connect wallet to trade" : "Atomic: borrow + hedge + perp in 1 tx"}
+              {!publicKey ? "Connect wallet to trade" : "Perpetual futures — deposit margin, settle PnL on close"}
             </div>
           </>
         )}

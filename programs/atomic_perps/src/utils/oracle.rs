@@ -182,6 +182,22 @@ pub fn validate_jlp_price(jlp_price_6dp: u64, sol_price_6dp: u64) -> Result<(), 
     Ok(())
 }
 
+/// Validate mSOL price (passed as instruction data) against SOL price sanity bounds.
+/// mSOL Pyth feed uses old V2 format incompatible with push oracle parser.
+/// mSOL trades at ~1.0-1.2x SOL, so [SOL/2, SOL*2] is a safe sanity window.
+pub fn validate_msol_price(msol_price_6dp: u64, sol_price_6dp: u64) -> Result<(), ProgramError> {
+    use crate::constants::MSOL_PRICE_SANITY_FACTOR;
+    if msol_price_6dp == 0 || sol_price_6dp == 0 {
+        return Err(AtomicPerpsError::JlpPriceOutOfRange.into());
+    }
+    let lower = sol_price_6dp / MSOL_PRICE_SANITY_FACTOR;
+    let upper = sol_price_6dp.saturating_mul(MSOL_PRICE_SANITY_FACTOR);
+    if msol_price_6dp < lower || msol_price_6dp > upper {
+        return Err(AtomicPerpsError::JlpPriceOutOfRange.into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

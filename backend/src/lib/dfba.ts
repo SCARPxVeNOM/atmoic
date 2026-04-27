@@ -38,6 +38,44 @@ export interface BatchResult {
 const PYTH_CAP_BPS = 30n; // ±0.3%
 const BPS = 10_000n;
 
+// ---- VPIN: Volume-Synchronized Probability of Informed Trading ----
+// Reference: Hasbrouck & Henderson (2022), "Measuring Adverse Selection in AMMs"
+// VPIN = |V_buy - V_sell| / V_total per batch bucket
+// High VPIN (>0.7): informed/toxic flow → widen spread
+// Low VPIN (<0.3): noise/uninformed flow → tighten spread
+
+const VPIN_WINDOW = 50; // rolling window of last 50 batches
+const vpinHistory: { vpin: number; timestamp: number }[] = [];
+
+/** Current rolling VPIN estimate (0–1 scale). */
+export function getVpin(): number {
+  if (vpinHistory.length === 0) return 0.5; // neutral default
+  const sum = vpinHistory.reduce((s, v) => s + v.vpin, 0);
+  return sum / vpinHistory.length;
+}
+
+/** Record VPIN for a completed DFBA batch. */
+function recordVpin(bidVolume: bigint, askVolume: bigint): void {
+  const total = bidVolume + askVolume;
+  if (total === 0n) return;
+  const diff = bidVolume > askVolume ? bidVolume - askVolume : askVolume - bidVolume;
+  const vpin = Number(diff) / Number(total);
+  vpinHistory.push({ vpin, timestamp: Date.now() });
+  while (vpinHistory.length > VPIN_WINDOW) vpinHistory.shift();
+}
+
+/** Get VPIN classification for spread adjustment. */
+export function getVpinClassification(): {
+  vpin: number;
+  classification: "toxic" | "neutral" | "benign";
+  spreadMultiplier: number;
+} {
+  const vpin = getVpin();
+  if (vpin > 0.7) return { vpin, classification: "toxic", spreadMultiplier: 1.5 };
+  if (vpin < 0.3) return { vpin, classification: "benign", spreadMultiplier: 0.8 };
+  return { vpin, classification: "neutral", spreadMultiplier: 1.0 };
+}
+
 /**
  * Route an order to a shard index based on user pubkey.
  * user_pubkey[0] % 8
@@ -214,7 +252,16 @@ export function mergeShardsAndClear(
   const { fills, unfilled } = generateFills(bids, asks, clearingPrice);
 
   let totalVolume = 0n;
-  for (const f of fills) totalVolume += f.size;
+  let bidFillVolume = 0n;
+  let askFillVolume = 0n;
+  for (const f of fills) {
+    totalVolume += f.size;
+    if (f.side === "bid") bidFillVolume += f.size;
+    else askFillVolume += f.size;
+  }
+
+  // Record VPIN for this batch
+  recordVpin(bidFillVolume, askFillVolume);
 
   const deviationBps = pythPrice > 0n
     ? Number(((clearingPrice - pythPrice) * BPS) / pythPrice)

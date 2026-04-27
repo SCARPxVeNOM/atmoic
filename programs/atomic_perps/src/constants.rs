@@ -107,15 +107,8 @@ pub const CORRELATED_CAP_BPS: u64 = 10_000; // 100% — permissive for bootstrap
 
 pub const JLP_LIQUIDATION_GRACE_SECONDS: i64 = 7_200; // 2 hours
 pub const JLP_PRICE_SANITY_FACTOR: u64 = 50; // JLP price must be within 1/50x–50x of SOL (JLP ~$3.9, SOL ~$86)
-
-// === Pyth mSOL/USD Feed ID (mainnet hex) ===
-
-pub const PYTH_MSOL_USD_FEED_ID: [u8; 32] = [
-    0xc2, 0x28, 0x9a, 0x6a, 0x43, 0xd2, 0xce, 0x91,
-    0xc6, 0xf5, 0x5c, 0xae, 0xc3, 0x70, 0xf4, 0xac,
-    0xc3, 0x8a, 0x2e, 0xd4, 0x77, 0xf5, 0x88, 0x13,
-    0x33, 0x4c, 0x6d, 0x03, 0x74, 0x9f, 0xf2, 0xa4,
-];
+// mSOL trades at ~1.0-1.2x SOL — sanity factor of 2 gives generous [SOL/2, SOL*2] bounds
+pub const MSOL_PRICE_SANITY_FACTOR: u64 = 2;
 
 // === Risk Parameters (must match qedspec constants) ===
 
@@ -138,3 +131,10 @@ pub const SWITCHBOARD_SOL_USD_FEED: Pubkey =
     solana_program::pubkey!("GvDMxPzN1sCj7L26YDK2HnMRXEQmQ2aemov8YBtPS7vR");
 
 pub const ORACLE_DIVERGENCE_BPS: u64 = 200; // 2% — halt if Pyth/Switchboard diverge
+
+// === Perps Margin ===
+
+/// Maintenance margin: liquidation when effective_margin / notional < 5%.
+/// At 10x leverage, ~4.5% adverse move triggers liquidation.
+/// At 5x leverage, ~12.5% adverse move triggers liquidation.
+pub const MAINTENANCE_MARGIN_BPS: u64 = 500;

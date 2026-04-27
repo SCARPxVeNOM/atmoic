@@ -9,7 +9,6 @@ import { decodeGlobalConfig, decodePosition, PositionData } from "../lib/decode"
 import { computeHealth } from "../lib/health";
 import { fetchLatestPrice } from "../lib/pyth";
 import { buildLiquidateIx } from "../lib/ix-builders";
-import { buildKaminoRepay, extractIxForCpi } from "../lib/kamino";
 
 import { CollateralType, requiresGracePeriod, getGracePeriodMs } from "../lib/haircuts";
 import { GlobalConfigData } from "../lib/decode";
@@ -31,14 +30,14 @@ function resolveCollateralVaultAndPrice(
   collType: CollateralType,
   config: GlobalConfigData,
   solPrice6dp: bigint,
-): { vault: PublicKey; mint: PublicKey; msolFeed?: PublicKey; collateralPrice?: bigint } {
+): { vault: PublicKey; mint: PublicKey; collateralPrice?: bigint } {
   switch (collType) {
     case "JLP":
-      // JLP price: would need Jupiter pool fetch here. For now pass SOL price as placeholder
-      // (on-chain validates within 5x bounds). Full JLP pricing comes from lib/jlp.ts.
+      // JLP price: pass SOL price as placeholder — on-chain validates within sanity bounds.
       return { vault: config.jlpVault, mint: config.jlpMint, collateralPrice: solPrice6dp };
     case "mSOL":
-      return { vault: config.msolVault, mint: config.msolMint, msolFeed: config.pythMsolFeed };
+      // mSOL: pass SOL price as approximate — on-chain validates within 2x bounds.
+      return { vault: config.msolVault, mint: config.msolMint, collateralPrice: solPrice6dp };
     default:
       return { vault: config.solVault, mint: config.solMint };
   }
@@ -160,26 +159,11 @@ export async function runLiquidatorOnce(): Promise<void> {
     );
 
     // Resolve vault + ATAs based on collateral type
-    const { vault, mint, msolFeed, collateralPrice } = resolveCollateralVaultAndPrice(
+    const { vault, mint, collateralPrice } = resolveCollateralVaultAndPrice(
       collateralType, config, price6dp,
     );
     const liquidatorCollateralAta = getAssociatedTokenAddressSync(mint, liquidator.publicKey);
     const feeRecipientCollateralAta = getAssociatedTokenAddressSync(mint, config.feeRecipient);
-
-    // Build Kamino repay CPI data for debt repayment on liquidation
-    let kaminoRepayData: Buffer | undefined;
-    let kaminoRemainingAccounts: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[] | undefined;
-    try {
-      const repayBundle = await buildKaminoRepay(data.owner, config.usdcMint, data.borrowAmountUsdc);
-      const extracted = extractIxForCpi(repayBundle.lendingIx);
-      kaminoRepayData = extracted.data;
-      kaminoRemainingAccounts = [
-        { pubkey: extracted.programId, isSigner: false, isWritable: false },
-        ...extracted.accounts,
-      ];
-    } catch (e) {
-      log.warn({ err: String(e) }, "kamino repay build failed — liquidating without CPI repay");
-    }
 
     const ix = buildLiquidateIx({
       liquidator: liquidator.publicKey,
@@ -188,10 +172,7 @@ export async function runLiquidatorOnce(): Promise<void> {
       liquidatorCollateralAccount: liquidatorCollateralAta,
       feeRecipientCollateralAccount: feeRecipientCollateralAta,
       pythPriceFeed: config.pythSolFeed,
-      kaminoRepayData,
-      kaminoRemainingAccounts,
       collateralPrice,
-      msolFeedAccount: msolFeed,
     });
 
     const tx = new Transaction().add(

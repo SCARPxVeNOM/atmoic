@@ -10,34 +10,29 @@ use crate::errors::AtomicPerpsError;
 use crate::constants::*;
 use crate::constants::is_allowed_feed;
 use crate::ensure;
-use crate::utils::oracle::{validate_and_get_price, validate_jlp_price};
-use crate::utils::math::{apply_fee, calculate_pnl, checked_mul_div, get_decimals_for_mint, token_to_usd};
-use crate::utils::token::{spl_transfer, spl_transfer_signed, read_token_amount};
+use crate::utils::oracle::{validate_and_get_price, validate_jlp_price, validate_msol_price};
+use crate::utils::math::{calculate_pnl, checked_mul_div, get_decimals_for_mint, token_to_usd, apply_haircut};
+use crate::utils::token::{spl_transfer_signed, read_token_amount};
 use crate::utils::account::{load_config, save_config, load_position, save_position};
 use crate::events::emit_position_closed;
-#[cfg(feature = "kamino-cpi")]
-use crate::utils::cpi::kamino::cpi_repay;
 
 pub struct AtomicCloseParams {
-    pub kamino_repay_data: Vec<u8>,
-    // V3: JLP price for collateral settlement (0 = use oracle)
-    pub collateral_price_6dp: u64,
+    pub close_bps: u16,            // 10000 = full close, 5000 = 50%, 1 = 0.01%
+    pub collateral_price_6dp: u64, // JLP/mSOL price; 0 = use oracle
 }
 
 impl AtomicCloseParams {
     fn deserialize(data: &[u8]) -> Option<Self> {
-        if data.len() < 4 { return None; }
+        // u16(2) + u64(8) = 10 bytes
+        if data.len() < 2 { return None; }
         let mut o = 0;
-        let len = u32::from_le_bytes(data[o..o+4].try_into().unwrap()) as usize; o += 4;
-        if data.len() < o + len { return None; }
-        let kamino_repay_data = data[o..o+len].to_vec(); o += len;
-        // V3 extension: collateral_price_6dp (8 bytes) — default 0 if absent
+        let close_bps = u16::from_le_bytes(data[o..o+2].try_into().unwrap()); o += 2;
         let collateral_price_6dp = if o + 8 <= data.len() {
             u64::from_le_bytes(data[o..o+8].try_into().unwrap())
         } else {
             0
         };
-        Some(Self { kamino_repay_data, collateral_price_6dp })
+        Some(Self { close_bps, collateral_price_6dp })
     }
 }
 
@@ -54,17 +49,16 @@ pub fn process(
     let global_config_ai = next_account_info(iter)?;
     let position_ai = next_account_info(iter)?;
     let pyth_price_feed = next_account_info(iter)?;
-    let user_usdc_account = next_account_info(iter)?;
-    let usdc_reserve = next_account_info(iter)?;
-    let collateral_vault = next_account_info(iter)?;    // index 6 (was sol_vault)
-    let user_collateral_account = next_account_info(iter)?; // index 7 (was user_sol_account)
-    let fee_recipient_account = next_account_info(iter)?;
+    let collateral_vault = next_account_info(iter)?;         // index 4
+    let user_collateral_account = next_account_info(iter)?;  // index 5
+    let fee_recipient_account = next_account_info(iter)?;    // index 6
     let program_authority = next_account_info(iter)?;
     let token_program = next_account_info(iter)?;
-    // remaining_accounts after index 10
-    let remaining_accounts = &accounts[11..];
 
     ensure!(user.is_signer, AtomicPerpsError::Unauthorized);
+
+    // Validate close_bps: 1-10000
+    ensure!(params.close_bps >= 1 && params.close_bps <= 10000, AtomicPerpsError::BadInput);
 
     // Verify PDAs
     let (config_pda, _) = Pubkey::find_program_address(&[CONFIG_SEED], program_id);
@@ -85,9 +79,8 @@ pub fn process(
     ensure!(position.owner == *user.key, AtomicPerpsError::Unauthorized);
     ensure!(is_allowed_feed(pyth_price_feed.key), AtomicPerpsError::InvalidOracleFeed);
     ensure!(*pyth_price_feed.key == position.perp_market, AtomicPerpsError::InvalidOracleFeed);
-    ensure!(*usdc_reserve.key == config.usdc_reserve, AtomicPerpsError::BadInput);
 
-    // Determine collateral type from position and validate vault
+    // Determine collateral type and validate vault
     let coll_mint = position.collateral_mint;
     let is_correlated = coll_mint == config.jlp_mint || coll_mint == config.msol_mint;
     let expected_vault = if coll_mint == config.jlp_mint {
@@ -101,63 +94,48 @@ pub fn process(
 
     let coll_decimals = get_decimals_for_mint(&coll_mint);
     let entry_price = position.entry_price;
-    let perp_size = position.perp_size;
     let perp_side = position.perp_side;
-    let borrow_amount = position.borrow_amount_usdc;
-    let collateral_amount = position.collateral_amount;
 
     // -------- 1. Oracle --------
     let clock = Clock::get()?;
     let (exit_price, _conf) = validate_and_get_price(pyth_price_feed, &clock)?;
 
-    // Get collateral price for PnL settlement
-    let mut extra_remaining_offset: usize = 0;
+    // Get collateral price for settlement
     let collateral_price = if coll_mint == config.jlp_mint {
-        // JLP: price from instruction data, validated
         validate_jlp_price(params.collateral_price_6dp, exit_price)?;
         params.collateral_price_6dp
     } else if coll_mint == config.msol_mint {
-        // mSOL: from Pyth mSOL feed in remaining_accounts[0]
-        ensure!(!remaining_accounts.is_empty(), AtomicPerpsError::BadInput);
-        let msol_feed = &remaining_accounts[0];
-        ensure!(*msol_feed.key == config.pyth_msol_feed, AtomicPerpsError::InvalidOracleFeed);
-        extra_remaining_offset = 1;
-        let (msol_price, _) = crate::utils::oracle::validate_and_get_price_for_feed(
-            msol_feed, &clock, &PYTH_MSOL_USD_FEED_ID,
-        )?;
-        msol_price
+        validate_msol_price(params.collateral_price_6dp, exit_price)?;
+        params.collateral_price_6dp
     } else {
-        // SOL: use the perp market exit price
         exit_price
     };
 
-    // -------- 2. PnL --------
-    let pnl = calculate_pnl(entry_price, exit_price, perp_size, &perp_side)?;
+    // -------- 2. Scale closing portion --------
+    let close_ratio = params.close_bps as u64;
+    let closing_collateral = checked_mul_div(position.collateral_amount, close_ratio, BPS_DENOMINATOR)?;
+    let closing_size = checked_mul_div(position.perp_size, close_ratio, BPS_DENOMINATOR)?;
 
-    // -------- 3. Settle in collateral (perps-style — no USDC repayment from user) --------
-    // Convert borrow + fee to collateral units and deduct from return.
     let pow = 10u64
         .checked_pow(coll_decimals as u32)
         .ok_or(AtomicPerpsError::MathOverflow)?;
 
-    // Borrow cost in collateral: borrow_usdc * 10^decimals / collateral_price
-    let borrow_in_collateral = checked_mul_div(borrow_amount, pow, collateral_price.max(1))?;
+    // -------- 3. PnL on closing portion --------
+    let pnl = calculate_pnl(entry_price, exit_price, closing_size, &perp_side)?;
 
-    // Fee in collateral
-    let (_rem, fee_amount_usdc) = apply_fee(borrow_amount, config.protocol_fee_bps)?;
-    let fee_in_collateral = checked_mul_div(fee_amount_usdc, pow, collateral_price.max(1))?;
-
-    // PnL in collateral
     let pnl_in_collateral_abs: u64 = if pnl == 0 { 0 } else {
         checked_mul_div(pnl.unsigned_abs(), pow, collateral_price.max(1))?
     };
 
-    // Collateral return = deposit - borrow_cost - fee + PnL
-    let mut collateral_to_return = collateral_amount
-        .saturating_sub(borrow_in_collateral)
-        .saturating_sub(fee_in_collateral);
+    // -------- 4. Close fee (on closing notional) --------
+    let fee_usd = checked_mul_div(closing_size, config.protocol_fee_bps, BPS_DENOMINATOR)?;
+    let fee_in_collateral = checked_mul_div(fee_usd, pow, collateral_price.max(1))?;
+
+    // -------- 5. Settlement: closing_collateral - fee +/- PnL --------
+    let mut collateral_to_return = closing_collateral.saturating_sub(fee_in_collateral);
     if pnl > 0 {
         collateral_to_return = collateral_to_return.saturating_add(pnl_in_collateral_abs);
+        // Cap at vault balance to prevent over-withdrawal
         let vault_amount = read_token_amount(collateral_vault)?;
         collateral_to_return = collateral_to_return.min(vault_amount);
     } else if pnl < 0 {
@@ -168,30 +146,19 @@ pub fn process(
     let authority_seeds: &[&[u8]] = &[AUTHORITY_SEED, &[authority_bump]];
     let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
 
-    // Fee: transfer fee portion from vault to fee_recipient in collateral
+    // -------- 6. Fee transfer: vault -> fee_recipient (90%) + PSF accrual (10%) --------
     let psf_portion_coll = fee_in_collateral / 10;
     let recipient_fee_coll = fee_in_collateral.saturating_sub(psf_portion_coll);
     if recipient_fee_coll > 0 {
         spl_transfer_signed(token_program, collateral_vault, fee_recipient_account, program_authority, recipient_fee_coll, signer_seeds)?;
     }
-    // PSF accrual in USDC equivalent (accounting only)
-    config.psf_balance = config.psf_balance.saturating_add(fee_amount_usdc / 10);
+    // PSF accrual in USD equivalent (accounting only)
+    config.psf_balance = config.psf_balance.saturating_add(fee_usd / 10);
 
+    // -------- 7. Return collateral to user --------
     if collateral_to_return > 0 {
         spl_transfer_signed(token_program, collateral_vault, user_collateral_account, program_authority, collateral_to_return, signer_seeds)?;
     }
-
-    // Kamino CPI
-    let cpi_remaining = &remaining_accounts[extra_remaining_offset..];
-    #[cfg(feature = "kamino-cpi")]
-    if !params.kamino_repay_data.is_empty() {
-        ensure!(cpi_remaining.len() >= 2, AtomicPerpsError::BadInput);
-        let kamino_program = &cpi_remaining[0];
-        let repay_accounts = &cpi_remaining[1..];
-        cpi_repay(kamino_program, repay_accounts, &params.kamino_repay_data)?;
-    }
-    #[cfg(not(feature = "kamino-cpi"))]
-    let _ = (&params, cpi_remaining);
 
     emit_position_closed(
         &position.owner,
@@ -200,28 +167,48 @@ pub fn process(
         collateral_to_return,
     );
 
-    // Decrement collateral tracking
-    let deposit_usd = token_to_usd(collateral_amount, position.collateral_entry_price, coll_decimals).unwrap_or(0);
-    config.total_collateral = config.total_collateral.saturating_sub(deposit_usd);
+    // -------- 8. Update position (partial or full close) --------
+    // Decrement collateral tracking for the closing portion
+    let closing_collateral_usd = token_to_usd(closing_collateral, position.collateral_entry_price, coll_decimals).unwrap_or(0);
+    config.total_collateral = config.total_collateral.saturating_sub(closing_collateral_usd);
     if is_correlated {
-        config.total_correlated_collateral = config.total_correlated_collateral.saturating_sub(deposit_usd);
+        config.total_correlated_collateral = config.total_correlated_collateral.saturating_sub(closing_collateral_usd);
     }
 
-    config.total_usdc_borrowed = config.total_usdc_borrowed.saturating_sub(borrow_amount);
+    // Decrement OI by closing size
     match perp_side {
         crate::state::Side::Long => {
-            config.total_long_oi = config.total_long_oi.saturating_sub(perp_size);
+            config.total_long_oi = config.total_long_oi.saturating_sub(closing_size);
         }
         crate::state::Side::Short => {
-            config.total_short_oi = config.total_short_oi.saturating_sub(perp_size);
+            config.total_short_oi = config.total_short_oi.saturating_sub(closing_size);
         }
     }
-    save_config(global_config_ai, &config)?;
 
-    position.is_open = false;
-    position.collateral_amount = 0;
-    position.borrow_amount_usdc = 0;
-    position.perp_size = 0;
+    if params.close_bps >= 10000 {
+        // Full close
+        position.is_open = false;
+        position.collateral_amount = 0;
+        position.borrow_amount_usdc = 0;
+        position.perp_size = 0;
+    } else {
+        // Partial close — reduce position proportionally
+        position.collateral_amount = position.collateral_amount.saturating_sub(closing_collateral);
+        position.perp_size = position.perp_size.saturating_sub(closing_size);
+        position.borrow_amount_usdc = position.perp_size; // notional = perp_size
+
+        // Post-close margin check on remaining position
+        let remaining_coll_usd = apply_haircut(
+            token_to_usd(position.collateral_amount, collateral_price, coll_decimals)?,
+            crate::utils::math::get_haircut_for_mint(&coll_mint),
+        )?;
+        if position.perp_size > 0 {
+            let remaining_margin = checked_mul_div(remaining_coll_usd, BPS_DENOMINATOR, position.perp_size)?;
+            ensure!(remaining_margin >= MAINTENANCE_MARGIN_BPS, AtomicPerpsError::PositionUnhealthy);
+        }
+    }
+
+    save_config(global_config_ai, &config)?;
     save_position(position_ai, &position)?;
 
     Ok(())

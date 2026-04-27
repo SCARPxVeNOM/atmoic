@@ -32,24 +32,19 @@ import {
   buildAtomicOpenIx,
   buildPlaceOrderIx,
   buildCancelOrderIx,
+  buildSettleFundingIx,
   findQueueShardPda,
   Side,
 } from "../lib/ix-builders";
-import {
-  buildKaminoDeposit,
-  buildKaminoBorrow,
-  buildKaminoRepay,
-  extractIxForCpi,
-} from "../lib/kamino";
-import { buildJupiterSwap } from "../lib/jupiter";
 import { evaluateVaultRisk } from "../lib/spread";
-import { countAccounts } from "../lib/tx-builder";
 import { getMarket } from "../lib/market-registry";
 import { getPsfStatus } from "../lib/psf";
 import { liquidatorStats } from "./liquidator";
-import { compute8hTwap, computeFundingRate, getFundingHistory } from "../lib/funding";
+import { compute8hTwap, computeFundingRate, computeEnhancedFundingRate, getFundingHistory } from "../lib/funding";
 import { breakerState } from "./circuit-breaker";
 import { crankStats } from "./crank";
+import { fundingCrankStats } from "./funding-crank";
+import { getVpin, getVpinClassification } from "../lib/dfba";
 import { fetchJlpPrice } from "../lib/jlp";
 import { CollateralType } from "../lib/haircuts";
 import { checkCollateralCap, CollateralTotals } from "../lib/collateral-caps";
@@ -136,10 +131,12 @@ app.get("/vault/risk", async (_req, res) => {
   try {
     const config = await loadConfig();
     const risk = evaluateVaultRisk(config);
+    const vpin = getVpinClassification();
     res.json({
       ...risk,
-      totalBorrowed: config.totalUsdcBorrowed.toString(),
-      totalReserve: config.totalUsdcReserve.toString(),
+      vpin,
+      totalLongOi: config.totalLongOi.toString(),
+      totalShortOi: config.totalShortOi.toString(),
     });
   } catch (e) {
     res.status(500).json({ error: String(e) });
@@ -188,29 +185,25 @@ async function loadConfig(): Promise<GlobalConfigData> {
 }
 
 /**
- * Build an unsigned atomic_open tx for the wallet to sign. Returns base64
- * so the frontend can deserialize with Transaction.from().
+ * Build an unsigned atomic_open tx for the wallet to sign.
  *
- * Body: { wallet, collateralAmount (SOL lamports), borrowAmount (USDC 6dp),
- *         side ("Long"|"Short"), leverageBps, hedgeAmount,
- *         useKamino? (boolean — whether to include real Kamino CPI) }
+ * Pure margin perps: user deposits collateral, position is synthetic.
+ * No USDC is borrowed or sent to the user.
+ *
+ * Body: { wallet, collateralAmount (native units), side ("Long"|"Short"),
+ *         leverageBps, market?, collateralType? ("SOL"|"JLP"|"mSOL") }
  */
 app.post("/build-tx/open", async (req, res) => {
   try {
     const {
       wallet,
       collateralAmount,
-      borrowAmount,
       side,
       leverageBps,
-      hedgeAmount = "0",
-      useKamino = false,
-      useJupiterHedge = false,
-      jupiterHedgeAmount = "0",
       market = "SOL-PERP",
       collateralType = "SOL",   // "SOL" | "JLP" | "mSOL"
     } = req.body ?? {};
-    if (!wallet || !collateralAmount || !borrowAmount || !side || !leverageBps) {
+    if (!wallet || !collateralAmount || !side || !leverageBps) {
       return res.status(400).json({ error: "missing required field" });
     }
     const collType = collateralType as CollateralType;
@@ -246,41 +239,47 @@ app.post("/build-tx/open", async (req, res) => {
       // If one oracle is unavailable, proceed with single oracle (graceful degradation)
     }
 
-    // Dynamic spread (M-2): reject if vault too skewed.
+    // Dynamic spread (M-2): directional skew check.
     const risk = evaluateVaultRisk(config);
-    if (risk.suspended) {
+    const tradeSide = (side as string).toLowerCase();
+    if (risk.suspended && risk.blockedSide === tradeSide) {
       return res.status(503).json({
         error: "fills_suspended",
         skewPct: risk.skewPct,
-        message: "Vault skew exceeds 90% — fills suspended to protect LPs",
+        blockedSide: risk.blockedSide,
+        message: `Vault skew exceeds 90% — ${risk.blockedSide} fills suspended. ${risk.blockedSide === "long" ? "Short" : "Long"} trades still accepted.`,
       });
     }
-
-    // Spread fee is enforced on-chain — pass raw borrow + spread bps as ix param.
-    const rawBorrow = BigInt(borrowAmount);
 
     // Resolve collateral vault, mint, and price based on collateral type
     let collateralMint: PublicKey;
     let collateralVault: PublicKey;
-    let jlpPrice: bigint | undefined;
-    let msolFeedAccount: PublicKey | undefined;
+    let collateralPrice6dp: bigint | undefined;
 
     if (collType === "JLP") {
       collateralMint = config.jlpMint;
       collateralVault = config.jlpVault;
-      // Fetch live JLP virtual price from Jupiter pool
       const jlp = await fetchJlpPrice();
-      jlpPrice = jlp.virtualPrice6dp;
+      collateralPrice6dp = jlp.virtualPrice6dp;
     } else if (collType === "mSOL") {
       collateralMint = config.msolMint;
       collateralVault = config.msolVault;
-      msolFeedAccount = config.pythMsolFeed;
-      // Block mSOL deposits if depeg detected
       if (msolState.depositsBlocked) {
         return res.status(503).json({
           error: "msol_deposits_blocked",
           message: "mSOL deposits blocked — depeg or circuit breaker active",
         });
+      }
+      const msolMint = "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So";
+      const priceRes = await fetch(`https://api.jup.ag/price/v3?ids=${msolMint}`);
+      if (priceRes.ok) {
+        const priceData = await priceRes.json();
+        if (priceData[msolMint]?.usdPrice) {
+          collateralPrice6dp = BigInt(Math.round(Number(priceData[msolMint].usdPrice) * 1e6));
+        }
+      }
+      if (!collateralPrice6dp) {
+        return res.status(503).json({ error: "msol_price_unavailable", message: "Could not fetch mSOL price" });
       }
     } else {
       collateralMint = config.solMint;
@@ -296,7 +295,6 @@ app.post("/build-tx/open", async (req, res) => {
         JLP: collType === "JLP" ? config.totalCorrelatedCollateral : 0n,
         RAY_LP: 0n,
       };
-      // Cap check relaxed for bootstrap — on-chain program enforces final cap
       const capCheck = checkCollateralCap(collType, BigInt(collateralAmount), totals);
       if (!capCheck.allowed) {
         log.warn({ collateral: collType, afterPct: capCheck.afterYieldPct }, "collateral cap warning (proceeding — bootstrap mode)");
@@ -304,92 +302,31 @@ app.post("/build-tx/open", async (req, res) => {
     }
 
     const userCollateralAccount = getAssociatedTokenAddressSync(collateralMint, user, true);
-    const userUsdcAccount = getAssociatedTokenAddressSync(config.usdcMint, user, true);
+    // Fee recipient gets collateral tokens (not USDC) in pure perps model
     const feeRecipientAccount = getAssociatedTokenAddressSync(
-      config.usdcMint,
+      collateralMint,
       config.feeRecipient,
       true,
     );
 
-    // Kamino CPI disabled for atomic open — protocol uses its own USDC reserve.
-    // Kamino integration (deposit→borrow lifecycle) runs as a separate composable layer.
-    const kaminoBorrowData: Buffer = Buffer.alloc(0);
-    const kaminoRemainingAccounts: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[] = [];
-    const kaminoCleanupIxs: TransactionInstruction[] = [];
-
-    // atomic_open: no Jupiter CPI — hedge runs as standalone ix in same tx
     const ix = buildAtomicOpenIx({
       user,
       userCollateralAccount,
-      userUsdcAccount,
       collateralVault,
-      usdcReserve: config.usdcReserve,
       feeRecipientAccount,
       pythPriceFeed: marketFeed,
       collateralAmount: BigInt(collateralAmount),
-      borrowAmount: rawBorrow,
       perpSide: side === "Short" ? Side.Short : Side.Long,
       leverageBps: Number(leverageBps),
-      hedgeAmount: BigInt(0),
       spreadFeeBps: risk.spreadBps,
-      jupiterSwapData: Buffer.alloc(0),
-      jupiterRemainingAccounts: [],
-      kaminoBorrowData,
-      kaminoRemainingAccounts,
       collateralType: collTypeNum,
-      jlpPrice,
-      msolFeedAccount,
+      collateralPrice: collateralPrice6dp,
     });
 
     const [{ blockhash, lastValidBlockHeight }, lookupTables] = await Promise.all([
       connection.getLatestBlockhash(),
       getAlt(),
     ]);
-
-    // Build Jupiter hedge as separate tx (USDC→SOL after atomic_open)
-    // Runs after atomic_open — sent sequentially via signAllTransactions.
-    let jupiterHedgeTx: string | null = null;
-    if (useJupiterHedge && BigInt(jupiterHedgeAmount) > 0n) {
-      try {
-        const buildUrl = `https://api.jup.ag/swap/v2/build?inputMint=${config.usdcMint.toBase58()}&outputMint=So11111111111111111111111111111111111111112&amount=${jupiterHedgeAmount}&taker=${user.toBase58()}&slippageBps=100`;
-        const buildRes = await fetch(buildUrl);
-        if (buildRes.ok) {
-          const buildData = await buildRes.json();
-          const toIx = (raw: any): TransactionInstruction => new TransactionInstruction({
-            programId: new PublicKey(raw.programId),
-            keys: (raw.accounts as any[]).map((a: any) => ({
-              pubkey: new PublicKey(a.pubkey),
-              isSigner: a.isSigner,
-              isWritable: a.isWritable,
-            })),
-            data: Buffer.from(raw.data, "base64"),
-          });
-          const hedgeIxs: TransactionInstruction[] = [];
-          if (buildData.computeBudgetInstructions) hedgeIxs.push(...buildData.computeBudgetInstructions.map(toIx));
-          if (buildData.setupInstructions) hedgeIxs.push(...buildData.setupInstructions.map(toIx));
-          if (buildData.swapInstruction) hedgeIxs.push(toIx(buildData.swapInstruction));
-          if (buildData.cleanupInstruction) hedgeIxs.push(toIx(buildData.cleanupInstruction));
-
-          // Use Jupiter's ALTs for compression
-          let hedgeLookups = [...lookupTables];
-          if (buildData.addressesByLookupTableAddress) {
-            for (const [addr] of Object.entries(buildData.addressesByLookupTableAddress)) {
-              try {
-                const resp = await connection.getAddressLookupTable(new PublicKey(addr));
-                if (resp.value) hedgeLookups.push(resp.value);
-              } catch {}
-            }
-          }
-          const hedgeMsg = new TransactionMessage({
-            payerKey: user, recentBlockhash: blockhash, instructions: hedgeIxs,
-          }).compileToV0Message(hedgeLookups);
-          jupiterHedgeTx = Buffer.from(new VersionedTransaction(hedgeMsg).serialize()).toString("base64");
-          log.info({ hedgeAmount: jupiterHedgeAmount }, "Jupiter hedge tx built via V2");
-        }
-      } catch (e: any) {
-        log.warn({ err: e.message }, "Jupiter hedge build failed — proceeding without");
-      }
-    }
 
     function buildV0Tx(ixs: TransactionInstruction[]): string {
       const msg = new TransactionMessage({
@@ -398,32 +335,26 @@ app.post("/build-tx/open", async (req, res) => {
       return Buffer.from(new VersionedTransaction(msg).serialize()).toString("base64");
     }
 
-    // --- Split into setup tx + main tx (signed together via signAllTransactions) ---
+    // Setup instructions: ATA creation + collateral wrapping
     const setupIxs: TransactionInstruction[] = [
       ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
     ];
 
-    // Collateral setup: depends on collateral type
     if (collTypeNum === 0) {
       // SOL: wrap native SOL into wSOL ATA
       setupIxs.push(createAssociatedTokenAccountIdempotentInstruction(user, userCollateralAccount, user, NATIVE_MINT));
       setupIxs.push(SystemProgram.transfer({ fromPubkey: user, toPubkey: userCollateralAccount, lamports: BigInt(collateralAmount) }));
       setupIxs.push(createSyncNativeInstruction(userCollateralAccount));
     } else {
-      // JLP or mSOL: create ATA for the collateral token
       setupIxs.push(createAssociatedTokenAccountIdempotentInstruction(user, userCollateralAccount, user, collateralMint));
     }
-    // USDC ATA
-    setupIxs.push(createAssociatedTokenAccountIdempotentInstruction(user, userUsdcAccount, user, config.usdcMint));
-    // Fee recipient ATA
-    setupIxs.push(createAssociatedTokenAccountIdempotentInstruction(user, feeRecipientAccount, config.feeRecipient, config.usdcMint));
+    // Fee recipient collateral ATA
+    setupIxs.push(createAssociatedTokenAccountIdempotentInstruction(user, feeRecipientAccount, config.feeRecipient, collateralMint));
 
-    // One-click stake-to-trade: if user selected JLP/mSOL but only has SOL,
-    // auto-swap SOL → JLP/mSOL via Jupiter in a separate preceding tx.
+    // One-click stake-to-trade: auto-swap SOL → JLP/mSOL if user doesn't have enough
     let swapTx: string | null = null;
     if (collTypeNum === 1 || collTypeNum === 2) {
-      // Check if user already has enough JLP/mSOL
       let userCollBalance = 0n;
       try {
         const acct = await connection.getAccountInfo(userCollateralAccount);
@@ -433,70 +364,47 @@ app.post("/build-tx/open", async (req, res) => {
       } catch {}
 
       if (userCollBalance < BigInt(collateralAmount)) {
-        // User doesn't have enough JLP/mSOL — swap SOL → JLP/mSOL via Jupiter
         const targetMint = collTypeNum === 1
-          ? "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4"  // JLP
-          : "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So";  // mSOL
+          ? "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4"
+          : "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So";
         const deficit = BigInt(collateralAmount) - userCollBalance;
         try {
-          // Jupiter V2 /order with ExactOut — specify the exact output amount (JLP/mSOL deficit)
-          // and Jupiter computes the required SOL input. Returns a ready-to-sign serialized tx.
           const orderUrl = `https://api.jup.ag/swap/v2/order?inputMint=So11111111111111111111111111111111111111112&outputMint=${targetMint}&amount=${deficit.toString()}&swapMode=ExactOut&taker=${user.toBase58()}&slippageBps=150`;
           const orderRes = await fetch(orderUrl);
           if (orderRes.ok) {
             const orderData = await orderRes.json();
             if (orderData.transaction) {
               swapTx = orderData.transaction;
-              log.info({ collateral: collType, deficit: deficit.toString(), inAmount: orderData.inAmount, outAmount: orderData.outAmount }, "one-click: SOL→collateral swap built via V2 ExactOut");
-            } else {
-              log.warn({ orderData }, "Jupiter V2 /order returned no transaction");
+              log.info({ collateral: collType, deficit: deficit.toString() }, "one-click: SOL→collateral swap built");
             }
-          } else {
-            const errBody = await orderRes.text();
-            log.warn({ status: orderRes.status, body: errBody }, "Jupiter V2 /order ExactOut failed");
           }
         } catch (e: any) {
-          log.warn({ err: e.message, collateral: collType }, "one-click swap failed — user must have collateral token");
+          log.warn({ err: e.message, collateral: collType }, "one-click swap failed");
         }
 
         if (!swapTx) {
           return res.status(400).json({
             error: "need_collateral",
-            message: `You need ${collType} tokens to use this collateral type. Get ${collType === "JLP" ? "JLP from jup.ag/perps/jlp-earn" : "mSOL from marinade.finance"}, or select SOL collateral.`,
+            message: `You need ${collType} tokens. Get ${collType === "JLP" ? "JLP from jup.ag/perps/jlp-earn" : "mSOL from marinade.finance"}, or select SOL collateral.`,
           });
         }
       }
     }
 
-    // === ATOMIC OPEN: split into focused transactions ===
-    // Tx 1 (setup): wSOL wrap + ATA creation + Kamino deposit
-    // Tx 2 (core):  Kamino borrow refresh + atomic_open (Kamino CPI) + wSOL close
-    // Tx 3 (hedge): Jupiter swap USDC→SOL (only if hedge requested)
-    //
-    // Atomicity: frontend uses signAllTransactions (one Phantom dialog),
-    // sends sequentially. If Tx2 fails, Tx3 is never sent.
-    // Kamino deposit + borrow + perp open are the critical path.
-
-    // Tx 2: atomic_open core instruction
+    // Main tx: atomic_open
     const mainIxs: TransactionInstruction[] = [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 800_000 }),
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
       ix,
     ];
-    // Close wSOL ATA last
     if (collTypeNum === 0) {
       mainIxs.push(createCloseAccountInstruction(userCollateralAccount, user, user));
     }
 
-    // Build transaction list
     let txs: string[] = [];
+    if (swapTx) txs.push(swapTx);
 
-    // Tx 0 (optional): Jupiter swap SOL → JLP/mSOL for one-click stake-to-trade
-    if (swapTx) {
-      txs.push(swapTx);
-    }
-
-    // Try to fit setup+main in one tx. If too large, split.
+    // Try single tx, fall back to split
     try {
       const allIxs = [...setupIxs.slice(2), ...mainIxs];
       const singleTx = buildV0Tx(allIxs);
@@ -508,12 +416,7 @@ app.post("/build-tx/open", async (req, res) => {
       }
     } catch {
       txs.push(buildV0Tx(setupIxs), buildV0Tx(mainIxs));
-      log.info({ txCount: txs.length, hasSwap: !!swapTx, hasHedge: !!jupiterHedgeTx }, "atomic open: multi-tx mode");
-    }
-
-    // Tx 3 (optional): Jupiter hedge USDC→SOL as a separate tx after main open
-    if (jupiterHedgeTx) {
-      txs.push(jupiterHedgeTx);
+      log.info({ txCount: txs.length, hasSwap: !!swapTx }, "atomic open: multi-tx mode");
     }
 
     res.json({
@@ -532,12 +435,12 @@ app.post("/build-tx/open", async (req, res) => {
 
 app.post("/build-tx/close", async (req, res) => {
   try {
-    const { wallet, useKamino = false } = req.body ?? {};
+    const { wallet, closeBps = 10000 } = req.body ?? {};
     if (!wallet) return res.status(400).json({ error: "wallet required" });
     const user = new PublicKey(wallet);
     const config = await loadConfig();
 
-    // Look up position to determine collateral type and borrow amount
+    // Look up position to determine collateral type
     const [positionPda] = findPositionPda(user);
     const posAcct = await connection.getAccountInfo(positionPda);
     if (!posAcct) return res.status(404).json({ error: "no position" });
@@ -550,7 +453,6 @@ app.post("/build-tx/close", async (req, res) => {
     let closeCollateralVault: PublicKey;
     let closeCollateralMint: PublicKey;
     let closeCollateralPrice: bigint | undefined;
-    let closeMsolFeedAccount: PublicKey | undefined;
 
     if (posMintStr === JLP_MINT_STR || position.collateralMint.equals(config.jlpMint)) {
       closeCollateralMint = config.jlpMint;
@@ -560,51 +462,37 @@ app.post("/build-tx/close", async (req, res) => {
     } else if (posMintStr === MSOL_MINT_STR || position.collateralMint.equals(config.msolMint)) {
       closeCollateralMint = config.msolMint;
       closeCollateralVault = config.msolVault;
-      closeMsolFeedAccount = config.pythMsolFeed;
+      const priceRes = await fetch(`https://api.jup.ag/price/v3?ids=${MSOL_MINT_STR}`);
+      if (priceRes.ok) {
+        const priceData = await priceRes.json();
+        if (priceData[MSOL_MINT_STR]?.usdPrice) {
+          closeCollateralPrice = BigInt(Math.round(Number(priceData[MSOL_MINT_STR].usdPrice) * 1e6));
+        }
+      }
+      if (!closeCollateralPrice) {
+        return res.status(503).json({ error: "msol_price_unavailable", message: "Could not fetch mSOL price for close" });
+      }
     } else {
       closeCollateralMint = config.solMint;
       closeCollateralVault = config.solVault;
     }
 
     const userCollateralAccount = getAssociatedTokenAddressSync(closeCollateralMint, user, true);
-    const userUsdcAccount = getAssociatedTokenAddressSync(config.usdcMint, user, true);
-    // Fee recipient gets collateral tokens (not USDC) since close settles in collateral
+    // Fee recipient gets collateral tokens in pure perps model
     const feeRecipientAccount = getAssociatedTokenAddressSync(
       closeCollateralMint,
       config.feeRecipient,
       true,
     );
 
-    // Build Kamino repay ixs if requested.
-    let kaminoRepayData: Buffer = Buffer.alloc(0);
-    let kaminoRemainingAccounts: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[] = [];
-    let kaminoSetupIxs: any[] = [];
-    let kaminoCleanupIxs: any[] = [];
-
-    if (useKamino) {
-      const kamino = await buildKaminoRepay(user, config.usdcMint, position.borrowAmountUsdc);
-      const extracted = extractIxForCpi(kamino.lendingIx);
-      kaminoRepayData = extracted.data;
-      kaminoRemainingAccounts = [
-        { pubkey: extracted.programId, isSigner: false, isWritable: false },
-        ...extracted.accounts,
-      ];
-      kaminoSetupIxs = kamino.setupIxs;
-      kaminoCleanupIxs = kamino.cleanupIxs;
-    }
-
     const ix = buildAtomicCloseIx({
       user,
       userCollateralAccount,
-      userUsdcAccount,
       collateralVault: closeCollateralVault,
-      usdcReserve: config.usdcReserve,
       feeRecipientAccount,
       pythPriceFeed: config.pythSolFeed,
-      kaminoRepayData,
-      kaminoRemainingAccounts,
+      closeBps: Number(closeBps),
       collateralPrice: closeCollateralPrice,
-      msolFeedAccount: closeMsolFeedAccount,
     });
 
     const [{ blockhash, lastValidBlockHeight }, lookupTables] = await Promise.all([
@@ -619,15 +507,10 @@ app.post("/build-tx/close", async (req, res) => {
       return Buffer.from(new VersionedTransaction(msg).serialize()).toString("base64");
     }
 
-    // The user needs USDC to repay and a wSOL ATA to receive collateral back.
-    // Check if user has enough USDC; if not, swap SOL→USDC first.
     const setupIxs: TransactionInstruction[] = [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 300_000 }),
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
     ];
-
-    // Ensure USDC ATA exists
-    setupIxs.push(createAssociatedTokenAccountIdempotentInstruction(user, userUsdcAccount, user, config.usdcMint));
 
     // For SOL collateral: create wSOL ATA to receive collateral back
     const isSolCollateral = closeCollateralMint.equals(config.solMint);
@@ -635,26 +518,37 @@ app.post("/build-tx/close", async (req, res) => {
       setupIxs.push(createAssociatedTokenAccountIdempotentInstruction(user, userCollateralAccount, user, NATIVE_MINT));
     }
 
-    // Fee recipient collateral ATA (fees paid in collateral on close)
+    // Fee recipient collateral ATA
     setupIxs.push(createAssociatedTokenAccountIdempotentInstruction(user, feeRecipientAccount, config.feeRecipient, closeCollateralMint));
 
-    // Main tx: Kamino setup + atomic_close + Kamino cleanup + unwrap wSOL
     const mainIxs: TransactionInstruction[] = [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 800_000 }),
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }),
-      ...kaminoSetupIxs, ix, ...kaminoCleanupIxs,
+      ix,
     ];
-    // Close wSOL ATA to unwrap back to native SOL
     if (isSolCollateral) {
       mainIxs.push(createCloseAccountInstruction(userCollateralAccount, user, user));
     }
 
-    const txs = [buildV0Tx(setupIxs), buildV0Tx(mainIxs)];
+    // Try single tx, fall back to split
+    let txs: string[];
+    try {
+      const allIxs = [...setupIxs.slice(2), ...mainIxs];
+      const singleTx = buildV0Tx(allIxs);
+      if (Buffer.from(singleTx, "base64").length <= 1232) {
+        txs = [singleTx];
+      } else {
+        throw new Error("too large");
+      }
+    } catch {
+      txs = [buildV0Tx(setupIxs), buildV0Tx(mainIxs)];
+    }
 
     res.json({
       txs,
       blockhash,
       lastValidBlockHeight,
+      closeBps: Number(closeBps),
     });
   } catch (e) {
     res.status(500).json({ error: String(e) });
@@ -663,7 +557,6 @@ app.post("/build-tx/close", async (req, res) => {
 
 // ---- Kamino SOL yield endpoint ----
 // Uses klend-sdk on-chain data via the already-loaded KaminoMarket.
-import { invalidateMarketCache } from "../lib/kamino";
 
 let cachedYield: { apy: number; fetchedAt: number } | null = null;
 const YIELD_CACHE_MS = 60_000;
@@ -704,10 +597,30 @@ app.get("/liquidator/status", (_req, res) => {
 app.get("/funding/sol", async (_req, res) => {
   try {
     const { twapPrice, sampleCount } = compute8hTwap();
+    const config = await loadConfig();
     const { price6dp } = await fetchLatestPrice();
     const spotPrice = Number(price6dp) / 1e6;
     const { rate8h, rateAnnualized } = computeFundingRate(spotPrice, twapPrice);
-    res.json({ rate: rateAnnualized, rate8h, twapPrice, spotPrice, sampleCount });
+
+    // Predictive rate with trend/skew/variance adjustments
+    const enhanced = computeEnhancedFundingRate(
+      spotPrice, twapPrice,
+      Number(config.totalLongOi), Number(config.totalShortOi),
+    );
+
+    res.json({
+      rate: rateAnnualized,
+      rate8h,
+      twapPrice,
+      spotPrice,
+      sampleCount,
+      enhanced: {
+        rate8h: enhanced.rate8h,
+        rateAnnualized: enhanced.rateAnnualized,
+        components: enhanced.components,
+        model: "predictive-controller",
+      },
+    });
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
@@ -808,6 +721,53 @@ app.post("/build-tx/cancel-order", async (req, res) => {
   }
 });
 
+// ---- settle-funding (manual trigger for testing) ----
+app.post("/build-tx/settle-funding", async (req, res) => {
+  try {
+    const { caller, positionOwner } = req.body ?? {};
+    if (!caller || !positionOwner) {
+      return res.status(400).json({ error: "caller, positionOwner required" });
+    }
+    const callerPk = new PublicKey(caller);
+    const config = await loadConfig();
+
+    // Compute current funding rate
+    const { twapPrice, sampleCount } = compute8hTwap();
+    if (sampleCount < 1) {
+      return res.status(503).json({ error: "not_enough_samples", message: "Need at least 1 TWAP sample" });
+    }
+    const { price6dp } = await fetchLatestPrice();
+    const spotPrice = Number(price6dp) / 1e6;
+    const { rate8h } = computeFundingRate(spotPrice, twapPrice);
+    const rateBps = BigInt(Math.max(-100, Math.min(100, Math.round(rate8h * 100))));
+
+    const ix = buildSettleFundingIx({
+      caller: callerPk,
+      positionOwner: new PublicKey(positionOwner),
+      fundingRateBps: rateBps,
+      pythPriceFeed: config.pythSolFeed,
+    });
+
+    const [{ blockhash, lastValidBlockHeight }, lookupTables] = await Promise.all([
+      connection.getLatestBlockhash(),
+      getAlt(),
+    ]);
+
+    const msg = new TransactionMessage({
+      payerKey: callerPk, recentBlockhash: blockhash, instructions: [ix],
+    }).compileToV0Message(lookupTables);
+
+    res.json({
+      tx: Buffer.from(new VersionedTransaction(msg).serialize()).toString("base64"),
+      blockhash,
+      lastValidBlockHeight,
+      fundingRateBps: rateBps.toString(),
+    });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 app.get("/circuit-breaker", (_req, res) => {
   res.json(breakerState);
 });
@@ -818,6 +778,38 @@ app.get("/msol/status", (_req, res) => {
 
 app.get("/crank/status", (_req, res) => {
   res.json(crankStats);
+});
+
+app.get("/funding-crank/status", (_req, res) => {
+  res.json(fundingCrankStats);
+});
+
+// ---- DFBA routing: hybrid engine status ----
+app.get("/dfba/status", async (_req, res) => {
+  try {
+    const config = await loadConfig();
+    const vpin = getVpinClassification();
+    const risk = evaluateVaultRisk(config);
+    res.json({
+      vpin,
+      spread: {
+        model: risk.model,
+        spreadBps: risk.spreadBps,
+        bidSpreadBps: risk.bidSpreadBps,
+        askSpreadBps: risk.askSpreadBps,
+        reservationOffsetBps: risk.reservationOffsetBps,
+        skewPct: risk.skewPct,
+        suspended: risk.suspended,
+      },
+      routing: {
+        description: "Hybrid engine: DFBA for price discovery, oracle vault as backstop",
+        dfbaActive: true,
+        vaultBackstopActive: true,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
 });
 
 app.get("/psf", async (_req, res) => {
