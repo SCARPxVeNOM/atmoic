@@ -29,6 +29,7 @@ pub fn process(
     let system_program = next_account_info(iter)?;
 
     ensure!(payer.is_signer, AtomicPerpsError::Unauthorized);
+    ensure!(*system_program.key == solana_program::system_program::ID, AtomicPerpsError::BadInput);
 
     // Derive expected PDA
     let seeds_data = [market, side, shard];

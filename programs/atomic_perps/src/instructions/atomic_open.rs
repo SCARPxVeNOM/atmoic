@@ -16,7 +16,7 @@ use crate::utils::math::{
     checked_mul_div, token_to_usd,
     calculate_min_spread,
 };
-use crate::utils::token::{spl_transfer, spl_transfer_signed};
+use crate::utils::token::{spl_transfer, spl_transfer_signed, read_token_owner};
 use crate::utils::account::{create_pda_account, load_config, load_position, save_config, save_position};
 use crate::events::emit_position_opened;
 use crate::constants::is_allowed_feed;
@@ -84,6 +84,10 @@ pub fn process(
     ensure!(*program_authority.key == auth_pda, AtomicPerpsError::BadInput);
 
     let mut config = load_config(global_config_ai)?;
+
+    // Validate fee recipient matches config
+    let fee_recipient_owner = read_token_owner(fee_recipient_account)?;
+    ensure!(fee_recipient_owner == config.fee_recipient, AtomicPerpsError::Unauthorized);
 
     // -------- 1. Input validation --------
     ensure!(!config.is_paused, AtomicPerpsError::ProtocolPaused);

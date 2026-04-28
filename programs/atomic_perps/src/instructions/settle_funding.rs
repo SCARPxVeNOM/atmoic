@@ -54,6 +54,9 @@ pub fn process(
     ensure!(*global_config_ai.key == config_pda, AtomicPerpsError::BadInput);
 
     let mut config = load_config(global_config_ai)?;
+
+    // Restrict caller to authority until on-chain TWAP is implemented
+    ensure!(*caller.key == config.authority, AtomicPerpsError::Unauthorized);
     let mut position = load_position(position_ai)?;
 
     ensure!(position.is_open, AtomicPerpsError::PositionNotOpen);
@@ -84,7 +87,8 @@ pub fn process(
     // Calculate funding adjustment in USD: (perp_size * funding_rate_bps) / BPS_DENOMINATOR
     let perp_size_i = position.perp_size as i128;
     let adjustment_usd_128 = (perp_size_i * (funding_rate_bps as i128)) / (BPS_DENOMINATOR as i128);
-    let adjustment_usd = adjustment_usd_128 as i64;
+    let adjustment_usd = i64::try_from(adjustment_usd_128)
+        .map_err(|_| ProgramError::from(AtomicPerpsError::MathOverflow))?;
 
     // Determine direction: longs pay positive funding, shorts receive it
     let effective_adjustment_usd = match position.perp_side {

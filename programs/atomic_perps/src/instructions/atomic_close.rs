@@ -12,7 +12,7 @@ use crate::constants::is_allowed_feed;
 use crate::ensure;
 use crate::utils::oracle::{validate_and_get_price, validate_jlp_price, validate_msol_price};
 use crate::utils::math::{calculate_pnl, checked_mul_div, get_decimals_for_mint, token_to_usd, apply_haircut};
-use crate::utils::token::{spl_transfer_signed, read_token_amount};
+use crate::utils::token::{spl_transfer_signed, read_token_amount, read_token_owner};
 use crate::utils::account::{load_config, save_config, load_position, save_position};
 use crate::events::emit_position_closed;
 
@@ -73,6 +73,11 @@ pub fn process(
     ensure!(*program_authority.key == auth_pda, AtomicPerpsError::BadInput);
 
     let mut config = load_config(global_config_ai)?;
+
+    // Validate fee recipient matches config
+    let fee_recipient_owner = read_token_owner(fee_recipient_account)?;
+    ensure!(fee_recipient_owner == config.fee_recipient, AtomicPerpsError::Unauthorized);
+
     let mut position = load_position(position_ai)?;
 
     ensure!(position.is_open, AtomicPerpsError::PositionNotOpen);

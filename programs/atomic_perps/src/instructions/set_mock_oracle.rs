@@ -24,6 +24,10 @@ pub fn process(
     let oracle = next_account_info(iter)?;
     let system_program = next_account_info(iter)?;
 
+    if !payer.is_signer {
+        return Err(ProgramError::MissingRequiredSignature);
+    }
+
     // Create oracle account if it doesn't exist yet
     if oracle.data_len() == 0 {
         let space: usize = 16;
