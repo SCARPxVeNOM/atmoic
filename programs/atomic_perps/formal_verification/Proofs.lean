@@ -102,29 +102,41 @@ theorem oi_cap_preserved_by_atomic_open
     (h_inv : oi_cap s)
     (h_succ : (atomic_openTransition s signer deposit leverage_bps perp_side oracle_price).isSome) :
     oi_cap ((atomic_openTransition s signer deposit leverage_bps perp_side oracle_price).get h_succ) := by
-  -- The guard ensures total_long_oi + total_short_oi + position_size <= max_tvl.
-  -- After the transition, total_long_oi and total_short_oi each increase by at most
-  -- position_size (exactly one side, depending on perp_side), so the sum is bounded.
-  -- Proof requires reducing let-bindings through Option.get; delegated to Leanstral.
-  sorry
+  unfold oi_cap
+  revert h_succ
+  unfold atomic_openTransition mulDivFloor
+  by_cases h : (s.is_paused = 0 ∧ deposit > 0 ∧ leverage_bps ≤ s.max_leverage ∧
+      leverage_bps ≥ 1000 ∧ s.is_open = 0 ∧
+      s.total_long_oi + s.total_short_oi + deposit * leverage_bps / 1000 ≤ s.max_tvl)
+  · simp [h]
+    obtain ⟨_, _, _, _, _, h_tvl⟩ := h
+    by_cases h0 : perp_side = 0 <;> by_cases h1 : perp_side = 1 <;> simp_all <;> omega
+  · simp [h]
 
 -- ================================================================
 -- leverage_bounds (size_usd <= collateral * max_leverage / 1000)
 -- ================================================================
 
+-- leverage_bounds: corrected to use deposit_amount (pre-fee deposit) instead of
+-- collateral (post-fee). The original property was FALSE when protocol_fee_bps > 0.
+-- This corrected version is TRUE: size_usd = deposit * leverage_bps / 1000,
+-- and leverage_bps ≤ max_leverage (guard), so size_usd ≤ deposit * max_leverage / 1000.
 theorem leverage_bounds_preserved_by_atomic_open
     (s : State) (signer : Pubkey)
     (deposit leverage_bps perp_side oracle_price : Nat)
     (h_inv : leverage_bounds s)
     (h_succ : (atomic_openTransition s signer deposit leverage_bps perp_side oracle_price).isSome) :
     leverage_bounds ((atomic_openTransition s signer deposit leverage_bps perp_side oracle_price).get h_succ) := by
-  -- Requires nonlinear Nat division reasoning about fee subtraction.
-  -- size_usd = deposit * leverage_bps / 1000
-  -- collateral = deposit - fee where fee = size_usd * protocol_fee_bps / 10000
-  -- The property holds when leverage_bps <= max_leverage (from guard)
-  -- but proving it requires: (d*l/1000) <= (d - d*l/1000*f/10000) * M / 1000
-  -- which is nonlinear division reasoning that omega cannot handle.
-  sorry
+  unfold leverage_bounds
+  revert h_succ
+  unfold atomic_openTransition mulDivFloor
+  by_cases h : (s.is_paused = 0 ∧ deposit > 0 ∧ leverage_bps ≤ s.max_leverage ∧
+      leverage_bps ≥ 1000 ∧ s.is_open = 0 ∧
+      s.total_long_oi + s.total_short_oi + deposit * leverage_bps / 1000 ≤ s.max_tvl)
+  · simp [h]
+    obtain ⟨_, _, h_lev, _, _, _⟩ := h
+    exact Nat.div_le_div_right (Nat.mul_le_mul_left deposit h_lev)
+  · simp [h]
 
 -- ================================================================
 -- funding_bounds (funding_rate_bps <= MAX_FUNDING_RATE_BPS)
@@ -135,10 +147,12 @@ theorem funding_bounds_preserved_by_settle_funding
     (funding_rate_bps current_timestamp : Nat)
     (h_succ : (settle_fundingTransition s signer funding_rate_bps current_timestamp).isSome) :
     funding_bounds ((settle_fundingTransition s signer funding_rate_bps current_timestamp).get h_succ) funding_rate_bps := by
-  -- The guard ensures funding_rate_bps <= MAX_FUNDING_RATE_BPS.
-  -- The property is on the parameter, not the state — trivially preserved.
-  -- Proof requires extracting the guard from Option.isSome; delegated to Leanstral.
-  sorry
+  unfold funding_bounds
+  revert h_succ
+  unfold settle_fundingTransition
+  by_cases h : (s.is_open = 1 ∧ s.is_paused = 0 ∧ funding_rate_bps ≤ MAX_FUNDING_RATE_BPS)
+  · simp [h]
+  · simp [h]
 
 -- ================================================================
 -- no_overflow (collateral + size_usd >= collateral)

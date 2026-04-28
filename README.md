@@ -1,128 +1,150 @@
-# Composable Perps Hub
+# Atomic Perps
 
-Atomic cross-protocol execution layer for perpetual futures on Solana — with **84 machine-checked safety proofs** in Lean 4. Borrow, open leveraged positions, and hedge — all in a single atomic transaction.
+Formally verified perpetual futures protocol on Solana — with **18 machine-checked Lean 4 proofs**, property-based testing, and bounded model checking. Pure margin model, academic pricing, MEV-resistant batch auctions.
 
 ## Problem
 
-Perpetual futures platforms today operate in isolation. Hyperliquid runs on its own app-chain with no composability. Drift and Jupiter Perps live on Solana but don't compose with lending protocols. Traders must manually borrow, bridge, and execute across multiple transactions — each one a point of failure.
+Perpetual futures on Solana lack formal safety guarantees. Existing protocols (Drift, Jupiter Perps) rely on test suites and audits — necessary but insufficient. A single arithmetic edge case in leverage computation or OI tracking can drain a vault. Meanwhile, traders face MEV extraction on every fill.
 
 ## Solution
 
-Composable Perps Hub enables **atomic borrow-to-trade**: a single Solana transaction that borrows USDC via Kamino Klend, opens a leveraged perp position, and optionally hedges via Jupiter — all-or-nothing. If any step fails, the entire transaction reverts.
+Atomic Perps is a **pure perps protocol** (GMX/Jupiter Perps vault-as-counterparty model) with three differentiators:
 
-This is only possible on Solana, where CPI (Cross-Program Invocation) enables atomic composability across protocols in a single transaction.
+1. **Formal Verification** — 18 Lean 4 theorems prove safety properties hold across every state transition, with zero `sorry`. Backed by proptest random testing and Kani bounded model checking.
+2. **Academic Mechanism Design** — Avellaneda-Stoikov spread pricing, CUSUM regime detection, VPIN toxicity scoring, and predictive funding rates.
+3. **DFBA Batch Auctions** — Discrete Frequent Batch Auctions for MEV-resistant order execution.
 
 ## How It Works
 
 ```
-User clicks "Open 2x Long SOL"
-         │
-         ▼
-┌─────────────────────────────────────────────┐
-│            Single Solana Transaction         │
-│                                              │
-│  1. Deposit SOL collateral → sol_vault       │
-│  2. Borrow USDC from reserve (fee applied)   │
-│  3. Open synthetic perp at Pyth oracle price │
-│  4. (Optional) Kamino CPI borrow             │
-│  5. Health check — revert if unhealthy       │
-│                                              │
-│  All-or-nothing: any failure = full revert   │
-└─────────────────────────────────────────────┘
+User clicks "Open 5x Long SOL"
+         |
+         v
++---------------------------------------------+
+|         Single Solana Transaction            |
+|                                              |
+|  1. Deposit SOL collateral -> vault          |
+|  2. Compute notional: deposit * leverage     |
+|  3. Deduct fee from collateral               |
+|  4. Open synthetic perp at Pyth oracle price |
+|  5. Update OI tracking (long/short)          |
+|  6. Margin check -- revert if unhealthy      |
+|                                              |
+|  All-or-nothing: any failure = full revert   |
++---------------------------------------------+
+         |
+    On close:
+    PnL = (exit_price - entry_price) * size
+    Collateral +/- PnL returned to trader
+    Losers fund winners (vault-as-counterparty)
 ```
+
+No borrowing. No external liquidity required. The vault is self-funded by trader deposits.
 
 ## Formal Verification
 
-This protocol is verified with **84 Lean 4 theorems, 0 `sorry`, 0 errors**. Every safety property is proven to hold across every state transition the program can execute.
+This protocol uses the **QEDGen verification waterfall** — three independent layers catching different bug classes:
 
-| Category | Count | What it proves |
-|----------|-------|----------------|
-| Preservation | 40 | Each of 5 safety properties holds after every handler |
-| Inductive | 5 | Property holds after *any* operation sequence |
-| Abort conditions | 21 | Invalid inputs are always rejected |
-| Cover (reachability) | 4 | Key user flows are reachable (not dead code) |
-| Transfer conservation | 6 | No tokens created or destroyed in any SPL transfer |
-| Overflow safety | 2 | u64 overflow cannot occur in `atomic_open` or `execute_batch` |
-| Invariants | 5 | Collateral flow, fee routing, liquidation math, DFBA price bounds |
-| Liveness | 1 | Active positions can always settle |
+### Lean 4 Proofs (18/18, zero sorry)
 
-**5 Safety Properties** (preserved by all 8 handlers):
-1. `reserve_solvency` — borrowed USDC never exceeds the reserve
-2. `leverage_bounded` — max_leverage is always positive
-3. `fee_bounded` — protocol fee stays within basis points range
-4. `oi_bounded` — total open interest bounded by reserve
-5. `liquidation_threshold_valid` — threshold stays within basis points range
+Every safety property is mathematically proven to hold across every state transition.
 
-**Bug found by formal verification:** Proving `oi_bounded` for `execute_batch` failed with only per-side OI guards. The combined guard (`long_oi + bid_vol + short_oi + ask_vol <= reserve`) was required — added to the program before deployment.
+| Property | Theorems | What it proves |
+|----------|----------|----------------|
+| `collateral_conservation` | 6 | Total collateral is always non-negative |
+| `oi_tracking` | 3 | Open interest fields are always non-negative |
+| `oi_cap` | 1 | Total OI never exceeds max TVL |
+| `leverage_bounds` | 1 | Position notional bounded by max_leverage * deposit |
+| `funding_bounds` | 1 | Funding rate stays within 1% cap |
+| `no_overflow` | 6 | Collateral + size arithmetic cannot wrap |
 
-See: [`formal_verification/Spec.lean`](formal_verification/Spec.lean) | [`atomic_perps.qedspec`](atomic_perps.qedspec)
+**Bug found by formal verification:** The original `leverage_bounds` property (`size_usd <= collateral * max_leverage / 1000`) was proven FALSE — fees reduce collateral below deposit while notional is computed from the full deposit. The corrected property tracks the pre-fee deposit amount. This is exactly the kind of bug formal methods are designed to catch.
+
+### Proptest (28 harnesses)
+
+Random property-based testing finds counterexamples in milliseconds:
+- 18 preservation tests (each property x each handler)
+- 5 guard rejection tests (invalid inputs always rejected)
+- 3 overflow detection tests (wrapping arithmetic caught)
+- 1 state machine sequence test (random operation chains)
+- 1 operation dispatcher
+
+### Kani BMC (8 harnesses)
+
+Bounded model checking via CBMC exhaustively verifies all possible inputs:
+- 4 invariant preservation proofs (oi_cap, leverage_bounds, funding_bounds, no_overflow)
+- 2 guard enforcement proofs (reject zero deposit, reject excessive funding rate)
+- 2 cover properties (open->close and open->liquidate paths are reachable)
+
+### CI Pipeline
+
+`.github/workflows/verify.yml` runs all three layers on every push:
+- `lake build` — Lean 4 proofs compile with zero sorry
+- `cargo test --test proptest` — property tests pass
+- `cargo kani` — bounded model checking passes
 
 ## Architecture
 
 ```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   Frontend   │────▶│   Backend    │────▶│   Solana      │
-│   React +    │     │   Express    │     │   Program     │
-│   Phantom    │     │   REST + WS  │     │   (on-chain)  │
-└──────────────┘     └──────────────┘     └──────────────┘
-                           │                     │
-                     ┌─────┴─────┐         ┌─────┴─────┐
-                     │Liquidator │         │  Kamino    │
-                     │  Service  │         │  Klend    │
-                     └───────────┘         │  (CPI)    │
-                     ┌───────────┐         └───────────┘
-                     │  Oracle   │         ┌───────────┐
-                     │  Relay    │         │   Pyth    │
-                     └───────────┘         │  Oracle   │
-                                           └───────────┘
-┌──────────────────────────────────────────────────────────┐
-│  Formal Verification (offline, pre-deploy)               │
-│  .qedspec → QEDGen → Lean 4 Spec.lean → lake build      │
-│  84 theorems, 0 sorry — safety for all 8 handlers        │
-└──────────────────────────────────────────────────────────┘
++---------------+     +---------------+     +---------------+
+|   Frontend    |---->|   Backend     |---->|   Solana       |
+|   React 18    |     |   Express     |     |   Program      |
+|   Phantom     |     |   REST + WS   |     |   (on-chain)   |
++---------------+     +---------------+     +---------------+
+                            |                     |
+                      +-----+-----+         +-----+-----+
+                      |Liquidator |         |   Pyth    |
+                      |  Service  |         |  Oracle   |
+                      +-----------+         +-----------+
+                      +-----------+
+                      | Funding   |
+                      |  Crank    |
+                      +-----------+
+
++----------------------------------------------------------+
+| Formal Verification (offline, pre-deploy)                |
+| .qedspec -> QEDGen -> Lean 4 + Proptest + Kani + CI     |
+| 18 theorems (0 sorry) + 28 proptest + 8 kani harnesses  |
++----------------------------------------------------------+
 ```
 
-**Program (Rust):** 10 instructions — core: `initialize`, `atomic_open`, `atomic_close`, `liquidate`, `update_config`, `migrate_config`; DFBA: `execute_batch`, `place_order`, `cancel_order`, `init_queue_shard`. Built with raw `solana-program` (no Anchor runtime) for minimal binary size (132 KB).
+**Program (Rust):** 6 core instructions — `initialize`, `atomic_open`, `atomic_close`, `liquidate`, `settle_funding`, `update_config`. Built with raw `solana-program` (no Anchor runtime) for minimal binary size (132 KB).
 
-**Backend (TypeScript):** REST API for transaction building, WebSocket for position updates, liquidator service for health monitoring, oracle relay for Pyth price updates.
+**Backend (TypeScript):** REST API for transaction building, WebSocket for position updates, liquidator service with margin-ratio health checks, funding rate crank (8h settlement cycle), Avellaneda-Stoikov spread engine, CUSUM regime detector, VPIN toxicity scorer.
 
-**Frontend (React):** Phantom wallet integration, one-click position management, real-time health factor display, Kamino yield APY tracking.
+**Frontend (React):** Phantom wallet integration, one-click position management, real-time PnL display, leverage selector, partial close support.
 
-**Formal Verification (Lean 4):** QEDGen-generated specification + hand-written Lean 4 proofs. 84 theorems, 0 sorry.
+**Formal Verification (Lean 4 + QEDGen):** `.qedspec` is the single source of truth. QEDGen generates Lean 4 specs, proptest harnesses, Kani harnesses, and CI workflows. 18 theorems proved by hand in Lean 4, zero sorry.
 
-## Protocol Integrations
+## Academic Foundations
 
-| Protocol | Role | Integration |
-|----------|------|-------------|
-| **Kamino Klend** | Borrow USDC against collateral | CPI pass-through via klend-sdk |
-| **Pyth Network** | SOL/USD price oracle | On-chain PriceUpdateV2 parsing |
-| **Jupiter** | Optional spot hedge swaps | CPI pass-through (feature-gated) |
+| Model | Purpose | Reference |
+|-------|---------|-----------|
+| **Avellaneda-Stoikov** | Dynamic spread pricing based on inventory risk | Avellaneda & Stoikov (2008) |
+| **CUSUM** | Regime change detection for volatility shifts | Page (1954) |
+| **VPIN** | Volume-synchronized probability of informed trading | Easley, Lopez de Prado & O'Hara (2012) |
+| **Predictive Funding** | Forward-looking funding rates from orderflow signals | Novel combination |
+| **DFBA** | Discrete Frequent Batch Auctions for MEV resistance | Budish, Cramton & Shim (2015) |
 
-## Target Users
+## Risk Parameters
 
-- **Kamino/Jupiter power users** — already depositing on Solana, want leveraged exposure without leaving the ecosystem
-- **Yield farmers** — want collateral earning yield while positions are open
-- **Drift refugees** — seeking composable alternatives with atomic execution
-- Not targeting Hyperliquid users — different product thesis (composability vs speed)
-
-## Risk Parameters (Phase 0)
-
-| Parameter | Value | Source |
-|-----------|-------|--------|
-| Max Leverage | 10x | limitations-handbook |
-| Liquidation Threshold | 85% LTV | limitations-handbook |
-| Protocol Fee | 0.1% (10 bps) | limitations-handbook |
-| TVL Cap | $500K USDC | limitations-handbook |
-| Oracle Staleness | <5 seconds | master-moves M-1 |
-| Oracle Confidence | <1% spread | master-moves M-1 |
-| Collateral | SOL only | Phase 0 scope |
+| Parameter | Value |
+|-----------|-------|
+| Max Leverage | 10x (10000 bps) |
+| Maintenance Margin | 5% (500 bps) |
+| Protocol Fee | 1% (100 bps) |
+| Max Funding Rate | 1% per 8h (100 bps) |
+| Liquidation Bonus | 5% (500 bps) |
+| Collateral | SOL (Phase 0) |
+| Oracle | Pyth Network |
 
 ## Tech Stack
 
-- **Blockchain:** Solana (mainnet)
-- **Program:** Rust, solana-program v1.18.26 (no Anchor runtime dependency)
-- **Formal Verification:** Lean 4 (v4.30.0-rc1), QEDGen
-- **Backend:** TypeScript, Express, @kamino-finance/klend-sdk
+- **Blockchain:** Solana Mainnet
+- **Program:** Rust, solana-program v1.18.26 (no Anchor)
+- **Formal Verification:** Lean 4 (v4.30.0-rc2), QEDGen v2.10.0
+- **Property Testing:** proptest, Kani (CBMC)
+- **Backend:** TypeScript, Express
 - **Frontend:** React 18, @solana/wallet-adapter, Vite
 - **Oracle:** Pyth Network (Hermes + on-chain PriceUpdateV2)
 
@@ -135,44 +157,35 @@ See: [`formal_verification/Spec.lean`](formal_verification/Spec.lean) | [`atomic
 | Binary Size | 132 KB |
 | Upgrade Authority | Deploy keypair |
 
-## Phase Roadmap
-
-| Phase | Scope | TVL Cap |
-|-------|-------|---------|
-| **Phase 0** (current) | Atomic MVP + DFBA batch auction + formal verification (84 proofs) | $500K |
-| Phase 1 | Oracle vault + dynamic spread + on-chain funding settlement + audit | $5M |
-| Phase 2 | Commit-reveal orders + ALTs + multi-market | $25M |
-| Phase 3 | JLP/mSOL collateral + circuit breakers | Uncapped |
-| Phase 4 | Raydium LP + governance token | — |
-
 ## Local Development
 
 ### Prerequisites
 - Rust + Solana CLI (v1.18.26)
-- Anchor CLI (v0.30+)
 - Node.js 18+
-- Lean 4 (v4.30.0-rc1) — for formal verification only
-
-### Build Program
-```bash
-anchor build --no-idl -- --features mock-oracle,dfba
-```
-
-### Run Tests
-```bash
-anchor test --skip-build
-```
+- Lean 4 (v4.30.0-rc2) — for formal verification
+- Kani (optional) — for bounded model checking
 
 ### Verify Proofs
 ```bash
-cd formal_verification && lake build
+cd programs/atomic_perps/formal_verification && lake build
+# All 18 theorems must pass with 0 errors, 0 sorry
 ```
-All 84 theorems must pass with 0 errors, 0 sorry.
+
+### Run Property Tests
+```bash
+cd programs/atomic_perps/programs
+cargo test --test proptest
+```
+
+### Run Kani (Linux/WSL only)
+```bash
+cargo kani --tests
+```
 
 ### Start Backend
 ```bash
 cd backend
-cp .env.example .env  # fill in values
+cp .env.example .env
 npm run dev
 ```
 

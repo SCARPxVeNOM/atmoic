@@ -1,0 +1,82 @@
+name: Formal Verification
+
+on:
+  push:
+    branches: [main, feat/spec-completion]
+    paths:
+      - 'programs/atomic_perps/src/**'
+      - 'programs/atomic_perps/formal_verification/**'
+      - 'programs/atomic_perps/atomic_perps.qedspec'
+  pull_request:
+    paths:
+      - 'programs/atomic_perps/src/**'
+      - 'programs/atomic_perps/formal_verification/**'
+      - 'programs/atomic_perps/atomic_perps.qedspec'
+
+jobs:
+  lean-proofs:
+    name: Lean 4 Proofs (18/18)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Lean
+        uses: leanprover/lean4-action@v1
+
+      - name: Cache lake packages
+        uses: actions/cache@v4
+        with:
+          path: programs/atomic_perps/formal_verification/.lake
+          key: lake-${{ hashFiles('programs/atomic_perps/formal_verification/lean-toolchain', 'programs/atomic_perps/formal_verification/lakefile.lean') }}
+
+      - name: Build proofs
+        run: cd programs/atomic_perps/formal_verification && lake build
+
+      - name: Verify zero sorry
+        run: |
+          count=$(grep -c 'sorry' programs/atomic_perps/formal_verification/Proofs.lean || true)
+          if [ "$count" -gt 0 ]; then
+            echo "ERROR: Found $count sorry markers in Proofs.lean"
+            exit 1
+          fi
+          echo "All 18 theorems proved — zero sorry"
+
+  proptest:
+    name: Property Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run proptest harnesses
+        run: |
+          cd programs/atomic_perps/programs
+          cargo test --test proptest -- --test-threads=1
+        env:
+          PROPTEST_CASES: 1000
+
+  kani:
+    name: Kani BMC (SMT)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Kani
+        run: |
+          cargo install --locked kani-verifier
+          cargo kani setup
+
+      - name: Run Kani harnesses
+        run: |
+          cd programs/atomic_perps/programs
+          cargo kani --tests --harness verify_atomic_open_preserves_oi_cap
+          cargo kani --tests --harness verify_atomic_open_preserves_leverage_bounds
+          cargo kani --tests --harness verify_settle_funding_preserves_funding_bounds
+          cargo kani --tests --harness verify_initialize_preserves_no_overflow
+          cargo kani --tests --harness verify_atomic_open_rejects_invalid
+          cargo kani --tests --harness verify_settle_funding_rejects_excessive_rate

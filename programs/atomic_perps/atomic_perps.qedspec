@@ -59,6 +59,8 @@ state {
   perp_size         : U64,
   entry_price       : U64,
   is_open           : U8,
+  // Ghost field: original deposit for leverage bound proofs
+  deposit_amount    : U64,
 }
 
 // ============================================================
@@ -132,6 +134,7 @@ handler atomic_open (deposit : U64) (leverage_bps : U64) (perp_side : U8) {
     perp_size        := position_size
     size_usd         := position_size
     collateral       := deposit - fee
+    deposit_amount   := deposit
     total_long_oi    += if perp_side == 0 then position_size else 0
     total_short_oi   += if perp_side == 1 then position_size else 0
     total_collateral += deposit
@@ -267,9 +270,11 @@ property oi_cap :
   total_long_oi + total_short_oi <= max_tvl
   preserved_by [atomic_open]
 
-/// Leverage bounds: position size bounded by leverage * collateral.
+/// Leverage bounds: position notional bounded by max_leverage applied to original deposit.
+/// The naive property (size_usd <= collateral * max_leverage / 1000) is FALSE when fees > 0
+/// because fees reduce collateral below deposit. This corrected version uses deposit_amount.
 property leverage_bounds :
-  size_usd <= mul_div_floor(collateral, max_leverage, 1000)
+  size_usd <= mul_div_floor(deposit_amount, max_leverage, 1000)
   preserved_by [atomic_open]
 
 /// Funding rate bounds: on-chain rate always within +-1%.

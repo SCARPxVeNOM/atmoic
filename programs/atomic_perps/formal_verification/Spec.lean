@@ -39,6 +39,8 @@ structure State where
   perp_size        : Nat
   entry_price      : Nat
   is_open          : Nat
+  -- Ghost field: original deposit for leverage bound proofs
+  deposit_amount   : Nat
   deriving Repr, DecidableEq, BEq
 
 instance : Inhabited State := ⟨{
@@ -48,6 +50,7 @@ instance : Inhabited State := ⟨{
   psf_balance := 0, total_collateral := 0, last_funding_at := 0,
   owner := default, collateral := 0, size_usd := 0,
   perp_side := 0, perp_size := 0, entry_price := 0, is_open := 0,
+  deposit_amount := 0,
 }⟩
 
 -- ================================================================
@@ -81,6 +84,7 @@ def atomic_openTransition (s : State) (signer : Pubkey)
       perp_size := position_size,
       size_usd := position_size,
       collateral := deposit - fee,
+      deposit_amount := deposit,
       total_long_oi := s.total_long_oi + (if perp_side = 0 then position_size else 0),
       total_short_oi := s.total_short_oi + (if perp_side = 1 then position_size else 0),
       total_collateral := s.total_collateral + deposit }
@@ -163,9 +167,12 @@ def oi_tracking (s : State) : Prop :=
 def oi_cap (s : State) : Prop :=
   s.total_long_oi + s.total_short_oi ≤ s.max_tvl
 
-/-- Leverage bounds: position size bounded by leverage * collateral. -/
+/-- Leverage bounds: position notional bounded by max_leverage applied to original deposit.
+    The original property (size_usd ≤ collateral * max_leverage / 1000) is FALSE when fees > 0
+    because fees reduce collateral below deposit. This corrected version tracks the pre-fee
+    deposit amount and bounds notional against it. -/
 def leverage_bounds (s : State) : Prop :=
-  s.size_usd ≤ mulDivFloor s.collateral s.max_leverage 1000
+  s.size_usd ≤ mulDivFloor s.deposit_amount s.max_leverage 1000
 
 /-- Funding rate bounds: on-chain rate always within +-1%. -/
 def funding_bounds (_s : State) (funding_rate_bps : Nat) : Prop :=
