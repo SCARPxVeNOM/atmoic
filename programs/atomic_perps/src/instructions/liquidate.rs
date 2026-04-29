@@ -237,6 +237,59 @@ pub fn process(
         position.collateral_amount = position.collateral_amount.saturating_sub(closing_collateral);
         position.perp_size = position.perp_size.saturating_sub(closing_size);
         position.borrow_amount_usdc = position.perp_size; // notional = size
+
+        // Post-deleverage health check: if remaining position is still below
+        // maintenance margin, escalate to full liquidation to prevent zombie positions
+        if position.perp_size > 0 {
+            let remaining_pnl = crate::utils::math::calculate_pnl_power(
+                position.entry_price, current_price, position.perp_size, &position.perp_side, power,
+            )?;
+            let remaining_eff_coll = if remaining_pnl >= 0 {
+                let pnl_coll = checked_mul_div(remaining_pnl as u64, pow, collateral_price.max(1))?;
+                position.collateral_amount.saturating_add(pnl_coll)
+            } else {
+                let loss_coll = checked_mul_div((-remaining_pnl) as u64, pow, collateral_price.max(1))?;
+                position.collateral_amount.saturating_sub(loss_coll)
+            };
+            let remaining_margin_usd = apply_haircut(
+                token_to_usd(remaining_eff_coll, health_price, coll_decimals)?,
+                haircut_bps,
+            )?;
+            let remaining_ratio = if position.perp_size == 0 { u64::MAX } else {
+                checked_mul_div(remaining_margin_usd, BPS_DENOMINATOR, position.perp_size)?
+            };
+            if remaining_ratio < MAINTENANCE_MARGIN_BPS {
+                // Still underwater after partial close — escalate to full liquidation
+                // Return remaining collateral minus bonus to fee_recipient
+                let leftover = position.collateral_amount;
+                let leftover_bonus = checked_mul_div(leftover, LIQUIDATION_BONUS_BPS, BPS_DENOMINATOR)?;
+                let leftover_remainder = leftover.saturating_sub(leftover_bonus);
+                if leftover_bonus > 0 {
+                    spl_transfer_signed(token_program, collateral_vault, liquidator_collateral_account, program_authority, leftover_bonus, signer_seeds)?;
+                }
+                if leftover_remainder > 0 {
+                    spl_transfer_signed(token_program, collateral_vault, fee_recipient_collateral_account, program_authority, leftover_remainder, signer_seeds)?;
+                }
+                // Update OI for remaining portion
+                let remaining_size = position.perp_size;
+                match position.perp_side {
+                    crate::state::Side::Long => config.total_long_oi = config.total_long_oi.saturating_sub(remaining_size),
+                    crate::state::Side::Short => config.total_short_oi = config.total_short_oi.saturating_sub(remaining_size),
+                }
+                let remaining_usd = token_to_usd(leftover, position.collateral_entry_price, coll_decimals).unwrap_or(0);
+                config.total_collateral = config.total_collateral.saturating_sub(remaining_usd);
+                if is_correlated {
+                    config.total_correlated_collateral = config.total_correlated_collateral.saturating_sub(remaining_usd);
+                }
+                save_config(global_config_ai, &config)?;
+                position.is_open = false;
+                position.collateral_amount = 0;
+                position.borrow_amount_usdc = 0;
+                position.perp_size = 0;
+                save_position(position_ai, &position)?;
+                return Ok(());
+            }
+        }
     }
     save_position(position_ai, &position)?;
 

@@ -141,13 +141,14 @@ pub fn process(
 
     // -------- 1e. Spread fee enforcement — caller must pay at least the min spread --------
     let min_spread = calculate_min_spread(config.total_long_oi, config.total_short_oi);
+    // Base spread must meet minimum BEFORE power doubling (prevents half-rate gaming)
+    ensure!(params.spread_fee_bps >= min_spread, AtomicPerpsError::BadInput);
     // Power perps pay a convexity premium: 2x spread for squeeth
     let effective_spread = if power == 2_000 {
         params.spread_fee_bps.saturating_mul(2)
     } else {
         params.spread_fee_bps
     };
-    ensure!(effective_spread >= min_spread, AtomicPerpsError::BadInput);
 
     // -------- 2. Oracle --------
     let clock = Clock::get()?;

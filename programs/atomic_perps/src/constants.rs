@@ -26,6 +26,29 @@ pub const PYTH_SOL_USD_FEED_ID: [u8; 32] = [
     0x0f, 0x4c, 0xfa, 0xc8, 0xc2, 0x80, 0xb5, 0x6d,
 ];
 
+pub const PYTH_BTC_USD_FEED_ID: [u8; 32] = [
+    0xe6, 0x2d, 0xf6, 0xc8, 0xb4, 0xa8, 0x5f, 0xe1,
+    0xa6, 0x7d, 0xb4, 0x4d, 0xc1, 0x2d, 0xe5, 0xdb,
+    0x33, 0x0f, 0x7a, 0xc6, 0x6b, 0x72, 0xdc, 0x65,
+    0x8a, 0xfe, 0xdf, 0x0f, 0x4a, 0x41, 0x5b, 0x43,
+];
+
+pub const PYTH_ETH_USD_FEED_ID: [u8; 32] = [
+    0xff, 0x61, 0x49, 0x1a, 0x93, 0x11, 0x12, 0xdd,
+    0xf1, 0xbd, 0x81, 0x47, 0xcd, 0x1b, 0x64, 0x13,
+    0x75, 0xf7, 0x9f, 0x58, 0x25, 0x12, 0x6d, 0x66,
+    0x54, 0x80, 0x87, 0x46, 0x34, 0xfd, 0x0a, 0xce,
+];
+
+/// Look up the expected Pyth feed ID for a given on-chain feed account address.
+/// Returns None if the feed is not in the whitelist.
+pub fn get_feed_id_for_account(feed: &Pubkey) -> Option<&'static [u8; 32]> {
+    if *feed == PYTH_SOL_FEED { Some(&PYTH_SOL_USD_FEED_ID) }
+    else if *feed == PYTH_BTC_FEED { Some(&PYTH_BTC_USD_FEED_ID) }
+    else if *feed == PYTH_ETH_FEED { Some(&PYTH_ETH_USD_FEED_ID) }
+    else { None }
+}
+
 // === Pyth On-Chain Feed Account Addresses (mainnet) ===
 // These are the account Pubkeys passed to instructions, not the hex feed IDs.
 
@@ -106,8 +129,10 @@ pub const CORRELATED_CAP_BPS: u64 = 10_000; // 100% — permissive for bootstrap
 // === JLP Risk Parameters ===
 
 pub const JLP_LIQUIDATION_GRACE_SECONDS: i64 = 7_200; // 2 hours
-pub const JLP_PRICE_SANITY_FACTOR: u64 = 5; // JLP price must be within 1/5x–5x of SOL
-// mSOL trades at ~1.0-1.2x SOL — sanity factor of 2 gives generous [SOL/2, SOL*2] bounds
+// Tightened from 5x to 2x: JLP ~$3-5 with SOL ~$150, so [SOL/2, SOL*2] = [$75, $300]
+// Previous 5x bounds allowed inflating collateral value by up to 5x
+pub const JLP_PRICE_SANITY_FACTOR: u64 = 2;
+// mSOL trades at ~1.05-1.15x SOL — tightened sanity window
 pub const MSOL_PRICE_SANITY_FACTOR: u64 = 2;
 
 // === Risk Parameters (must match qedspec constants) ===

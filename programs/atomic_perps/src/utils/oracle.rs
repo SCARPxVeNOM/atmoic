@@ -8,7 +8,7 @@ use crate::errors::AtomicPerpsError;
 #[cfg(not(feature = "mock-oracle"))]
 use crate::ensure;
 #[cfg(not(feature = "mock-oracle"))]
-use crate::constants::{MAX_ORACLE_AGE_SECONDS, MAX_ORACLE_CONFIDENCE_BPS, PYTH_SOL_USD_FEED_ID, PYTH_PUSH_ORACLE_PROGRAM};
+use crate::constants::{MAX_ORACLE_AGE_SECONDS, MAX_ORACLE_CONFIDENCE_BPS, PYTH_PUSH_ORACLE_PROGRAM, get_feed_id_for_account};
 use crate::constants::JLP_PRICE_SANITY_FACTOR;
 
 #[cfg(not(feature = "mock-oracle"))]
@@ -60,7 +60,10 @@ pub fn validate_and_get_price(
     pyth_feed_account: &AccountInfo,
     clock: &Clock,
 ) -> Result<(u64, u64), ProgramError> {
-    validate_and_get_price_for_feed(pyth_feed_account, clock, &PYTH_SOL_USD_FEED_ID)
+    // Look up the expected feed ID from the account's Pubkey (supports SOL, BTC, ETH)
+    let expected_feed_id = get_feed_id_for_account(pyth_feed_account.key)
+        .ok_or(AtomicPerpsError::InvalidOracleFeed)?;
+    validate_and_get_price_for_feed(pyth_feed_account, clock, expected_feed_id)
 }
 
 #[cfg(not(feature = "mock-oracle"))]
@@ -133,8 +136,11 @@ pub fn validate_switchboard_divergence(
     use crate::constants::{SWITCHBOARD_SOL_USD_FEED, ORACLE_DIVERGENCE_BPS, BPS_DENOMINATOR};
     use crate::ensure;
 
-    // Verify the account is the expected Switchboard aggregator
+    // Verify the account is the expected Switchboard aggregator (address + owner)
     ensure!(*switchboard_ai.key == SWITCHBOARD_SOL_USD_FEED, AtomicPerpsError::BadInput);
+    // Switchboard V2 program: SW1TCH7qEPTdLsDHRgPuMQjbQxKdH2aBStViMFnt64f
+    let sw_program = solana_program::pubkey!("SW1TCH7qEPTdLsDHRgPuMQjbQxKdH2aBStViMFnt64f");
+    ensure!(*switchboard_ai.owner == sw_program, AtomicPerpsError::BadInput);
 
     let data = switchboard_ai.try_borrow_data()?;
     // Switchboard V2 AggregatorAccountData: f64 result at offset 216, timestamp at 296
@@ -204,28 +210,28 @@ mod tests {
 
     #[test]
     fn test_validate_jlp_price_in_range() {
-        // JLP ~$3.9 with SOL ~$86 → bounds [$1.72, $4300], $3.9 is in range
-        assert!(validate_jlp_price(3_920_000, 86_000_000).is_ok());
+        // JLP ~$100 with SOL ~$150 → bounds [$75, $300], $100 is in range
+        assert!(validate_jlp_price(100_000_000, 150_000_000).is_ok());
         // JLP price equals SOL price → always valid
         assert!(validate_jlp_price(150_000_000, 150_000_000).is_ok());
     }
 
     #[test]
     fn test_validate_jlp_price_lower_bound() {
-        // SOL = $150, factor = 50, lower = 150/50 = $3
-        // $3 exactly → Ok
-        assert!(validate_jlp_price(3_000_000, 150_000_000).is_ok());
-        // $2.999999 → Err (below lower bound)
-        assert!(validate_jlp_price(2_999_999, 150_000_000).is_err());
+        // SOL = $150, factor = 2, lower = 150/2 = $75
+        // $75 exactly → Ok
+        assert!(validate_jlp_price(75_000_000, 150_000_000).is_ok());
+        // $74.999999 → Err (below lower bound)
+        assert!(validate_jlp_price(74_999_999, 150_000_000).is_err());
     }
 
     #[test]
     fn test_validate_jlp_price_upper_bound() {
-        // SOL = $150, factor = 50, upper = 150*50 = $7500
-        // $7500 exactly → Ok
-        assert!(validate_jlp_price(7_500_000_000, 150_000_000).is_ok());
-        // $7500.000001 → Err (above upper bound)
-        assert!(validate_jlp_price(7_500_000_001, 150_000_000).is_err());
+        // SOL = $150, factor = 2, upper = 150*2 = $300
+        // $300 exactly → Ok
+        assert!(validate_jlp_price(300_000_000, 150_000_000).is_ok());
+        // $300.000001 → Err (above upper bound)
+        assert!(validate_jlp_price(300_000_001, 150_000_000).is_err());
     }
 
     #[test]
@@ -242,11 +248,11 @@ mod tests {
     fn test_validate_jlp_price_large_sol() {
         // Large SOL price — saturating_mul prevents overflow
         let large_sol = u64::MAX / 100;
-        // upper = large_sol * 50 would overflow, saturating_mul caps at u64::MAX
+        // upper = large_sol * 2 would overflow, saturating_mul caps at u64::MAX
         // Any JLP price <= u64::MAX should be in range (upper = u64::MAX)
         assert!(validate_jlp_price(large_sol, large_sol).is_ok());
-        // Lower bound = large_sol / 50
-        let lower = large_sol / 50;
+        // Lower bound = large_sol / 2
+        let lower = large_sol / 2;
         assert!(validate_jlp_price(lower, large_sol).is_ok());
         assert!(validate_jlp_price(lower - 1, large_sol).is_err());
     }
