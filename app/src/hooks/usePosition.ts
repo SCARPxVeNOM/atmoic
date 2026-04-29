@@ -4,17 +4,21 @@ import { API_BASE } from "../config";
 
 export interface PositionView {
   owner: string;
+  perpMarket: string;
+  collateralMint: string;
   collateralAmount: string;
   borrowAmountUsdc: string;
   perpSide: number;
   perpSize: string;
   entryPrice: string;
   hedgeAmount: string;
+  collateralEntryPrice: string;
   isOpen: boolean;
 }
 
 export interface HealthView {
-  solPrice: number;
+  markPrice: number;
+  market: string;
   collateralValueUsdc: string;
   borrowValueUsdc: string;
   pnlUsdc: string;
@@ -22,15 +26,14 @@ export interface HealthView {
   liquidatable: boolean;
 }
 
-export function usePosition(defaultPollMs = 5000) {
+/** Fetch all open positions for the connected wallet. */
+export function usePositions(defaultPollMs = 5000) {
   const { publicKey } = useWallet();
-  const [position, setPosition] = useState<PositionView | null>(null);
-  const [health, setHealth] = useState<HealthView | null>(null);
+  const [positions, setPositions] = useState<PositionView[]>([]);
   const [loading, setLoading] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const pollMs = useRef(defaultPollMs);
 
-  /** Speed up polling temporarily (e.g. while awaiting confirmation). */
   const startConfirming = useCallback(() => {
     setConfirming(true);
     pollMs.current = 2000;
@@ -43,21 +46,21 @@ export function usePosition(defaultPollMs = 5000) {
 
   useEffect(() => {
     if (!publicKey) {
-      setPosition(null);
-      setHealth(null);
+      setPositions([]);
       return;
     }
     let alive = true;
     const tick = async () => {
       setLoading(true);
       try {
-        const [pRes, hRes] = await Promise.all([
-          fetch(`${API_BASE}/position/${publicKey.toBase58()}`),
-          fetch(`${API_BASE}/position/${publicKey.toBase58()}/health`),
-        ]);
+        const res = await fetch(`${API_BASE}/positions/${publicKey.toBase58()}`);
         if (!alive) return;
-        setPosition(pRes.ok ? await pRes.json() : null);
-        setHealth(hRes.ok ? await hRes.json() : null);
+        if (res.ok) {
+          const data = await res.json();
+          setPositions(Array.isArray(data) ? data : []);
+        } else {
+          setPositions([]);
+        }
       } finally {
         if (alive) setLoading(false);
       }
@@ -70,5 +73,12 @@ export function usePosition(defaultPollMs = 5000) {
     };
   }, [publicKey, confirming]);
 
-  return { position, health, loading, confirming, startConfirming, stopConfirming };
+  return { positions, loading, confirming, startConfirming, stopConfirming };
+}
+
+/** Legacy single-position hook for backward compat. Returns first open position. */
+export function usePosition(defaultPollMs = 5000) {
+  const { positions, loading, confirming, startConfirming, stopConfirming } = usePositions(defaultPollMs);
+  const position = positions.length > 0 ? positions[0] : null;
+  return { position, health: null as HealthView | null, loading, confirming, startConfirming, stopConfirming };
 }

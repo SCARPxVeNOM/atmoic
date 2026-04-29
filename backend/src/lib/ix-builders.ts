@@ -112,7 +112,7 @@ export interface AtomicOpenArgs {
 export function buildAtomicOpenIx(args: AtomicOpenArgs): TransactionInstruction {
   const [config] = findConfigPda();
   const [programAuthority] = findAuthorityPda();
-  const [position] = findPositionPda(args.user);
+  const [position] = findPositionPda(args.user, args.pythPriceFeed);
 
   const collType = args.collateralType ?? 0;
   const data = Buffer.concat([
@@ -156,7 +156,7 @@ export interface AtomicCloseArgs {
 export function buildAtomicCloseIx(args: AtomicCloseArgs): TransactionInstruction {
   const [config] = findConfigPda();
   const [programAuthority] = findAuthorityPda();
-  const [position] = findPositionPda(args.user);
+  const [position] = findPositionPda(args.user, args.pythPriceFeed);
 
   const data = Buffer.concat([
     discriminator("atomic_close"),
@@ -194,7 +194,7 @@ export function buildLiquidateIx(args: {
 }): TransactionInstruction {
   const [config] = findConfigPda();
   const [programAuthority] = findAuthorityPda();
-  const [position] = findPositionPda(args.positionOwner);
+  const [position] = findPositionPda(args.positionOwner, args.pythPriceFeed);
 
   const data = Buffer.concat([
     discriminator("liquidate"),
@@ -227,7 +227,7 @@ export function buildSettleFundingIx(args: {
   pythPriceFeed: PublicKey;
 }): TransactionInstruction {
   const [config] = findConfigPda();
-  const [position] = findPositionPda(args.positionOwner);
+  const [position] = findPositionPda(args.positionOwner, args.pythPriceFeed);
 
   const data = Buffer.concat([
     discriminator("settle_funding"),

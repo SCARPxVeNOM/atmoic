@@ -134,7 +134,7 @@ export const ProPanel: FC<{
     setBusy(true);
     setStatus(null);
     try {
-      const sig = await sendTx("/build-tx/close", { wallet: publicKey.toBase58(), useKamino: true });
+      const sig = await sendTx("/build-tx/close", { wallet: publicKey.toBase58(), useKamino: true, market });
       setStatus(`Closed: ${sig.slice(0, 8)}...`);
     } catch (e: any) {
       setStatus(e.message ?? String(e));

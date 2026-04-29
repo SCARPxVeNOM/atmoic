@@ -1,8 +1,8 @@
 import { FC, useState, useCallback } from "react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { useOracle } from "./hooks/useOracle";
-import { usePosition } from "./hooks/usePosition";
+import { useOracle, useOraclePrices } from "./hooks/useOracle";
+import { usePositions } from "./hooks/usePosition";
 import { useFundingRate } from "./hooks/useFundingRate";
 import { useTickers } from "./hooks/useTickers";
 import { IntroPage } from "./components/IntroPage";
@@ -61,7 +61,8 @@ export const App: FC = () => {
   const [uiMode, setUiMode] = useState<UiMode>("Standard");
 
   const oracle = useOracle();
-  const { position, health } = usePosition();
+  const oraclePrices = useOraclePrices(["sol", "btc", "eth"]);
+  const { positions } = usePositions();
   const funding = useFundingRate();
   const tickers = useTickers();
   const { publicKey, disconnect } = useWallet();
@@ -184,7 +185,7 @@ export const App: FC = () => {
       {page === "Trade" && uiMode === "Simple" && (
         <div style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
           <div style={{ width: 420, maxWidth: "100%" }}>
-            <SimplePanel position={position} solPrice={solPrice} />
+            <SimplePanel positions={positions} prices={oraclePrices} solPrice={solPrice} />
           </div>
         </div>
       )}
@@ -200,13 +201,13 @@ export const App: FC = () => {
                 fundingRate8h={funding?.rate8h}
               />
             </div>
-            <TradePanel accentColor={accent} solPrice={solPrice} showProData={uiMode === "Pro"} />
+            <TradePanel accentColor={accent} solPrice={solPrice} showProData={uiMode === "Pro"} activeMarket={activeMarket} prices={oraclePrices} />
           </div>
           {tweaks.showPositions && (
             <PositionsTable
               accentColor={accent}
-              position={position}
-              health={health}
+              positions={positions}
+              prices={oraclePrices}
               solPrice={solPrice}
             />
           )}
@@ -221,7 +222,7 @@ export const App: FC = () => {
 
       {page === "Portfolio" && (
         <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-          <PortfolioView accent={accent} solPrice={solPrice} position={position} health={health} />
+          <PortfolioView accent={accent} solPrice={solPrice} position={positions[0] || null} health={null} />
         </div>
       )}
 

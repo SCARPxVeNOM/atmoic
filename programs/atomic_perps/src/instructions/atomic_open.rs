@@ -76,7 +76,7 @@ pub fn process(
     ensure!(*global_config_ai.key == config_pda, AtomicPerpsError::BadInput);
 
     let (position_pda, position_bump) = Pubkey::find_program_address(
-        &[POSITION_SEED, user.key.as_ref()], program_id,
+        &[POSITION_SEED, user.key.as_ref(), pyth_price_feed.key.as_ref()], program_id,
     );
     ensure!(*position_ai.key == position_pda, AtomicPerpsError::BadInput);
 
@@ -213,7 +213,8 @@ pub fn process(
     // -------- 6. Create or reuse position account --------
     let now = Clock::get()?.unix_timestamp;
     let user_key = *user.key;
-    let pos_seeds: &[&[u8]] = &[POSITION_SEED, user_key.as_ref(), &[position_bump]];
+    let feed_key = *pyth_price_feed.key;
+    let pos_seeds: &[&[u8]] = &[POSITION_SEED, user_key.as_ref(), feed_key.as_ref(), &[position_bump]];
 
     if position_ai.data_len() == 0 {
         create_pda_account(

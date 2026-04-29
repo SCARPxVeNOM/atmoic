@@ -30,14 +30,30 @@ interface VaultRisk {
   suspended: boolean;
 }
 
+const MARKET_TO_PERP: Record<string, string> = {
+  "SOL-USD": "SOL-PERP",
+  "BTC-USD": "BTC-PERP",
+  "ETH-USD": "ETH-PERP",
+};
+
+const MARKET_TO_KEY: Record<string, string> = {
+  "SOL-USD": "sol",
+  "BTC-USD": "btc",
+  "ETH-USD": "eth",
+};
+
 export function TradePanel({
   accentColor,
   solPrice,
   showProData,
+  activeMarket,
+  prices,
 }: {
   accentColor: string;
   solPrice?: number;
   showProData?: boolean;
+  activeMarket?: string;
+  prices?: Record<string, number>;
 }) {
   const [side, setSide] = useState<"Long" | "Short">("Long");
   const [col, setCol] = useState("SOL");
@@ -54,7 +70,10 @@ export function TradePanel({
   const privy = usePrivySession();
 
   const accent = accentColor || "#58a6ff";
-  const price = solPrice || 0;
+  const perpMarket = MARKET_TO_PERP[activeMarket || "SOL-USD"] || "SOL-PERP";
+  const priceKey = MARKET_TO_KEY[activeMarket || "SOL-USD"] || "sol";
+  const markPrice = prices?.[priceKey] || solPrice || 0;
+  const price = solPrice || 0; // SOL price for collateral value
   const sol = parseFloat(amount) || 0;
   const cut = COLLATERAL.find(c => c.id === col)?.cut || 0;
 
@@ -192,7 +211,7 @@ export function TradePanel({
         side,
         leverageBps: leverage * 1000,
         collateralType: col,
-        market: "SOL-PERP",
+        market: perpMarket,
       });
       setStatus(`Opened: ${sig.slice(0, 8)}...`);
       setOptimistic(null);

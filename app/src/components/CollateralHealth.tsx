@@ -18,8 +18,8 @@ export const CollateralHealth: FC<{ health: HealthView | null }> = ({ health }) 
         <div className={`h-full ${color} transition-all`} style={{ width: `${barWidth}%` }} />
       </div>
       <dl className="mt-4 grid grid-cols-2 gap-2 text-sm">
-        <dt className="text-slate-400">SOL price</dt>
-        <dd className="text-right font-mono">${health.solPrice.toFixed(2)}</dd>
+        <dt className="text-slate-400">Mark price</dt>
+        <dd className="text-right font-mono">${(health.markPrice ?? 0).toFixed(2)}</dd>
         <dt className="text-slate-400">Collateral value</dt>
         <dd className="text-right font-mono">
           ${(Number(health.collateralValueUsdc) / 1e6).toFixed(2)}

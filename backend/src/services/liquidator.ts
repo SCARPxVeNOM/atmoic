@@ -171,7 +171,7 @@ export async function runLiquidatorOnce(): Promise<void> {
       collateralVault: vault,
       liquidatorCollateralAccount: liquidatorCollateralAta,
       feeRecipientCollateralAccount: feeRecipientCollateralAta,
-      pythPriceFeed: config.pythSolFeed,
+      pythPriceFeed: data.perpMarket,
       collateralPrice,
     });
 

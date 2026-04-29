@@ -1,11 +1,32 @@
 import { useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { VersionedTransaction } from "@solana/web3.js";
-import { PositionView, HealthView } from "../hooks/usePosition";
+import { PositionView } from "../hooks/usePosition";
 import { API_BASE } from "../config";
+
+// Map Pyth feed pubkeys to market symbols
+const FEED_TO_MARKET: Record<string, string> = {
+  "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE": "SOL-PERP",
+  "4cSM2e6rvbGQUFiJbqytoVMi5GgghSMr8LwVrT9VPSPo": "BTC-PERP",
+  "42amVS4KgzR9rA28tkVYqVXjq9Qa8dcZQMbH5EYFX6XC": "ETH-PERP",
+};
+
+const FEED_TO_PRICE_KEY: Record<string, string> = {
+  "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE": "sol",
+  "4cSM2e6rvbGQUFiJbqytoVMi5GgghSMr8LwVrT9VPSPo": "btc",
+  "42amVS4KgzR9rA28tkVYqVXjq9Qa8dcZQMbH5EYFX6XC": "eth",
+};
+
+// JLP has 6 decimals, SOL/mSOL have 9
+const JLP_MINT = "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4";
+
+function getCollateralDecimals(collateralMint: string): number {
+  return collateralMint === JLP_MINT ? 6 : 9;
+}
 
 interface DisplayPosition {
   market: string;
+  marketSymbol: string;
   side: "Long" | "Short";
   lv: number;
   sizeUsd: number;
@@ -18,34 +39,41 @@ interface DisplayPosition {
   marginCol: string;
 }
 
-function toDisplay(p: PositionView, h: HealthView | null, solPrice: number): DisplayPosition {
-  const collSol = Number(p.collateralAmount) / 1e9;
-  const notionalUsd = Number(p.borrowAmountUsdc) / 1e6; // repurposed as notional
+function toDisplay(p: PositionView, prices: Record<string, number>, fallbackPrice: number): DisplayPosition {
+  const decimals = getCollateralDecimals(p.collateralMint || "");
+  const collNative = Number(p.collateralAmount) / Math.pow(10, decimals);
+  const notionalUsd = Number(p.borrowAmountUsdc) / 1e6;
   const entry = Number(p.entryPrice) / 1e6;
   const side: "Long" | "Short" = p.perpSide === 0 ? "Long" : "Short";
-  const margin = collSol * solPrice;
+
+  const priceKey = FEED_TO_PRICE_KEY[p.perpMarket] || "sol";
+  const markPrice = prices[priceKey] || fallbackPrice;
+  const marketSymbol = FEED_TO_MARKET[p.perpMarket] || "SOL-PERP";
+  const marketLabel = marketSymbol.replace("-PERP", "-USD");
+
+  // For margin calculation, we need collateral value in USD
+  // Collateral is always denominated in SOL (for SOL collateral), so use SOL price
+  const solPrice = prices["sol"] || fallbackPrice;
+  const margin = collNative * solPrice;
   const lv = margin > 0 ? Math.round(notionalUsd / margin) : 1;
 
-  // PnL = (exit - entry) / entry * notional (for long, negate for short)
-  const priceDelta = side === "Long" ? solPrice - entry : entry - solPrice;
+  const priceDelta = side === "Long" ? markPrice - entry : entry - markPrice;
   const pnlRaw = entry > 0 ? (priceDelta / entry) * notionalUsd : 0;
   const pnlPct = margin > 0 ? (pnlRaw / margin) * 100 : 0;
 
-  // Margin ratio from API or computed locally
-  const marginRatioBps = h ? Number(h.healthFactorBps) : (notionalUsd > 0 ? (margin / notionalUsd) * 10000 : 99999);
-  const marginRatio = marginRatioBps / 10000;
-  // Color: >15% green, >8% yellow, <8% red (5% = liquidation)
+  const marginRatio = notionalUsd > 0 ? margin / notionalUsd : 99;
   const marginPct = marginRatio * 100;
   const marginCol = marginPct > 15 ? "#3fb68b" : marginPct > 8 ? "#d29922" : "#ff5353";
 
   return {
-    market: "SOL-USD",
+    market: marketLabel,
+    marketSymbol,
     side,
     lv,
     sizeUsd: notionalUsd,
     margin,
     entry,
-    mark: solPrice,
+    mark: markPrice,
     pnl: pnlRaw,
     pnlPct,
     marginRatio,
@@ -55,47 +83,46 @@ function toDisplay(p: PositionView, h: HealthView | null, solPrice: number): Dis
 
 export function PositionsTable({
   accentColor,
-  position,
-  health,
+  positions: rawPositions,
+  prices,
   solPrice,
 }: {
   accentColor: string;
-  position?: PositionView | null;
-  health?: HealthView | null;
+  positions?: PositionView[];
+  prices?: Record<string, number>;
   solPrice?: number;
 }) {
   const [tab, setTab] = useState("positions");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [closePercent, setClosePercent] = useState(100);
   const accent = accentColor || "#58a6ff";
-  const { publicKey, signTransaction } = useWallet();
+  const { publicKey, signTransaction, signAllTransactions } = useWallet();
   const { connection } = useConnection();
 
   const price = solPrice || 0;
-  const positions: DisplayPosition[] =
-    position?.isOpen ? [toDisplay(position, health ?? null, price)] : [];
+  const priceMap = prices || {};
+  const openPositions = (rawPositions || []).filter(p => p.isOpen);
+  const displayPositions: DisplayPosition[] = openPositions.map(p => toDisplay(p, priceMap, price));
 
   const TABS = [
-    { id: "positions", label: `Open Positions (${positions.length})` },
+    { id: "positions", label: `Open Positions (${displayPositions.length})` },
     { id: "orders", label: "Orders" },
     { id: "history", label: "Trade History" },
   ];
 
-  const totalPnl = positions.reduce((s, p) => s + p.pnl, 0);
+  const totalPnl = displayPositions.reduce((s, p) => s + p.pnl, 0);
 
-  const { signAllTransactions } = useWallet();
-
-  const closePosition = async () => {
+  const closePosition = async (marketSymbol: string) => {
     if (!publicKey || !signTransaction) return;
-    setBusy(true);
+    setBusy(marketSymbol);
     setStatus(null);
     try {
-      const closeBps = Math.round(closePercent * 100); // 100% = 10000 bps
+      const closeBps = Math.round(closePercent * 100);
       const res = await fetch(`${API_BASE}/build-tx/close`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wallet: publicKey.toBase58(), closeBps }),
+        body: JSON.stringify({ wallet: publicKey.toBase58(), closeBps, market: marketSymbol }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? "build failed");
       const data = await res.json();
@@ -125,7 +152,7 @@ export function PositionsTable({
     } catch (e: any) {
       setStatus(e.message ?? String(e));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
@@ -162,7 +189,7 @@ export function PositionsTable({
       {/* Content */}
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
         {tab === "positions" ? (
-          positions.length > 0 ? (
+          displayPositions.length > 0 ? (
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
                 <tr>
@@ -177,7 +204,7 @@ export function PositionsTable({
                 </tr>
               </thead>
               <tbody>
-                {positions.map((p, i) => (
+                {displayPositions.map((p, i) => (
                   <tr key={i} style={{ borderBottom: "1px solid #161b22" }}>
                     <td style={{ padding: "8px 12px", color: "#e6edf3", fontWeight: 600 }}>{p.market}</td>
                     <td style={{ padding: "8px 12px" }}>
@@ -213,7 +240,6 @@ export function PositionsTable({
                     </td>
                     <td style={{ padding: "8px 12px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        {/* Partial close: quick percent buttons */}
                         <div style={{ display: "flex", gap: 2 }}>
                           {[25, 50, 100].map(pct => (
                             <button key={pct} onClick={() => setClosePercent(pct)} style={{
@@ -226,12 +252,12 @@ export function PositionsTable({
                           ))}
                         </div>
                         <button
-                          disabled={busy}
-                          onClick={closePosition}
+                          disabled={busy === p.marketSymbol}
+                          onClick={() => closePosition(p.marketSymbol)}
                           style={{
                             padding: "4px 10px", borderRadius: 6, border: "1px solid #30363d",
-                            background: "transparent", color: busy ? "#8b949e" : "#e6edf3", fontSize: 11,
-                            cursor: busy ? "not-allowed" : "pointer", whiteSpace: "nowrap",
+                            background: "transparent", color: busy === p.marketSymbol ? "#8b949e" : "#e6edf3", fontSize: 11,
+                            cursor: busy === p.marketSymbol ? "not-allowed" : "pointer", whiteSpace: "nowrap",
                           }}
                           onMouseEnter={e => {
                             if (busy) return;
@@ -246,7 +272,7 @@ export function PositionsTable({
                             t.style.borderColor = "#30363d";
                             t.style.color = "#e6edf3";
                           }}
-                        >{busy ? "Closing..." : closePercent < 100 ? `Close ${closePercent}%` : "Close"}</button>
+                        >{busy === p.marketSymbol ? "Closing..." : closePercent < 100 ? `Close ${closePercent}%` : "Close"}</button>
                       </div>
                     </td>
                   </tr>

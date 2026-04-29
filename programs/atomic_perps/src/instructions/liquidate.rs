@@ -89,7 +89,7 @@ pub fn process(
 
     // Verify position PDA
     let (expected_pos_pda, _) = Pubkey::find_program_address(
-        &[POSITION_SEED, position.owner.as_ref()],
+        &[POSITION_SEED, position.owner.as_ref(), pyth_price_feed.key.as_ref()],
         program_id,
     );
     ensure!(*position_ai.key == expected_pos_pda, AtomicPerpsError::BadInput);

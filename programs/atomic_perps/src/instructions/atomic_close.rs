@@ -65,7 +65,7 @@ pub fn process(
     ensure!(*global_config_ai.key == config_pda, AtomicPerpsError::BadInput);
 
     let (position_pda, _) = Pubkey::find_program_address(
-        &[POSITION_SEED, user.key.as_ref()], program_id,
+        &[POSITION_SEED, user.key.as_ref(), pyth_price_feed.key.as_ref()], program_id,
     );
     ensure!(*position_ai.key == position_pda, AtomicPerpsError::BadInput);
 

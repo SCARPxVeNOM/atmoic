@@ -13,6 +13,6 @@ export function findAuthorityPda(): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([AUTHORITY_SEED], programId);
 }
 
-export function findPositionPda(owner: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([POSITION_SEED, owner.toBuffer()], programId);
+export function findPositionPda(owner: PublicKey, marketFeed: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync([POSITION_SEED, owner.toBuffer(), marketFeed.toBuffer()], programId);
 }

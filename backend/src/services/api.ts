@@ -84,10 +84,32 @@ app.get("/config", async (_req, res) => {
   }
 });
 
-app.get("/position/:wallet", async (req, res) => {
+// Fetch all positions for a wallet across all markets
+app.get("/positions/:wallet", async (req, res) => {
   try {
     const wallet = new PublicKey(req.params.wallet);
-    const [pda] = findPositionPda(wallet);
+    const accounts = await connection.getProgramAccounts(programId, {
+      filters: [{ memcmp: { offset: 8, bytes: wallet.toBase58() } }],
+    });
+    const positions = accounts
+      .map(a => decodePosition(a.account.data))
+      .filter(p => p.isOpen)
+      .map(p => serialize(p));
+    res.json(positions);
+  } catch (e) {
+    res.status(400).json({ error: String(e) });
+  }
+});
+
+// Fetch single position by wallet + market
+app.get("/position/:wallet/:market?", async (req, res) => {
+  try {
+    const wallet = new PublicKey(req.params.wallet);
+    const marketSymbol = req.params.market || "SOL-PERP";
+    const marketInfo = getMarket(marketSymbol);
+    if (!marketInfo) return res.status(400).json({ error: `Unknown market: ${marketSymbol}` });
+    const marketFeed = new PublicKey(marketInfo.pythFeedPubkey);
+    const [pda] = findPositionPda(wallet, marketFeed);
     const acct = await connection.getAccountInfo(pda);
     if (!acct) return res.status(404).json({ error: "no position" });
     res.json(serialize(decodePosition(acct.data)));
@@ -96,16 +118,20 @@ app.get("/position/:wallet", async (req, res) => {
   }
 });
 
-app.get("/position/:wallet/health", async (req, res) => {
+app.get("/position/:wallet/:market/health", async (req, res) => {
   try {
     const wallet = new PublicKey(req.params.wallet);
-    const [positionPda] = findPositionPda(wallet);
+    const marketSymbol = req.params.market || "SOL-PERP";
+    const marketInfo = getMarket(marketSymbol);
+    if (!marketInfo) return res.status(400).json({ error: `Unknown market: ${marketSymbol}` });
+    const marketFeed = new PublicKey(marketInfo.pythFeedPubkey);
+    const [positionPda] = findPositionPda(wallet, marketFeed);
     const [configPda] = findConfigPda();
 
     const [posAcct, cfgAcct, { price6dp }] = await Promise.all([
       connection.getAccountInfo(positionPda),
       connection.getAccountInfo(configPda),
-      fetchLatestPrice(),
+      fetchLatestPrice(marketInfo.pythFeedId),
     ]);
 
     if (!posAcct) return res.status(404).json({ error: "no position" });
@@ -119,7 +145,8 @@ app.get("/position/:wallet/health", async (req, res) => {
       liquidationThresholdBps: config.liquidationThreshold,
     });
     res.json({
-      solPrice: Number(price6dp) / 1e6,
+      markPrice: Number(price6dp) / 1e6,
+      market: marketSymbol,
       ...serialize(report),
     });
   } catch (e) {
@@ -435,13 +462,20 @@ app.post("/build-tx/open", async (req, res) => {
 
 app.post("/build-tx/close", async (req, res) => {
   try {
-    const { wallet, closeBps = 10000 } = req.body ?? {};
+    const { wallet, closeBps = 10000, market = "SOL-PERP" } = req.body ?? {};
     if (!wallet) return res.status(400).json({ error: "wallet required" });
     const user = new PublicKey(wallet);
     const config = await loadConfig();
 
+    // Resolve market feed for PDA derivation
+    const marketInfo = getMarket(market);
+    if (!marketInfo || !marketInfo.enabled) {
+      return res.status(400).json({ error: `Market ${market} not found or disabled` });
+    }
+    const marketFeed = new PublicKey(marketInfo.pythFeedPubkey);
+
     // Look up position to determine collateral type
-    const [positionPda] = findPositionPda(user);
+    const [positionPda] = findPositionPda(user, marketFeed);
     const posAcct = await connection.getAccountInfo(positionPda);
     if (!posAcct) return res.status(404).json({ error: "no position" });
     const position = decodePosition(posAcct.data);
@@ -490,7 +524,7 @@ app.post("/build-tx/close", async (req, res) => {
       userCollateralAccount,
       collateralVault: closeCollateralVault,
       feeRecipientAccount,
-      pythPriceFeed: config.pythSolFeed,
+      pythPriceFeed: marketFeed,
       closeBps: Number(closeBps),
       collateralPrice: closeCollateralPrice,
     });
@@ -594,11 +628,16 @@ app.get("/liquidator/status", (_req, res) => {
   res.json(liquidatorStats);
 });
 
-app.get("/funding/sol", async (_req, res) => {
+app.get("/funding/:market", async (req, res) => {
   try {
+    const marketParam = req.params.market.toUpperCase();
+    const symbol = marketParam.endsWith("-PERP") ? marketParam : `${marketParam}-PERP`;
+    const marketInfo = getMarket(symbol);
+    const feedId = marketInfo?.pythFeedId;
+
     const { twapPrice, sampleCount } = compute8hTwap();
     const config = await loadConfig();
-    const { price6dp } = await fetchLatestPrice();
+    const { price6dp } = await fetchLatestPrice(feedId);
     const spotPrice = Number(price6dp) / 1e6;
     const { rate8h, rateAnnualized } = computeFundingRate(spotPrice, twapPrice);
 
@@ -899,13 +938,19 @@ app.get("/tickers", async (_req, res) => {
   }
 });
 
-app.get("/price/sol", async (_req, res) => {
+app.get("/price/:market", async (req, res) => {
   try {
-    const p = await fetchLatestPrice();
+    const marketParam = req.params.market.toUpperCase();
+    // Support both "sol" and "SOL-PERP" formats
+    const symbol = marketParam.endsWith("-PERP") ? marketParam : `${marketParam}-PERP`;
+    const marketInfo = getMarket(symbol);
+    if (!marketInfo) return res.status(400).json({ error: `Unknown market: ${req.params.market}` });
+    const p = await fetchLatestPrice(marketInfo.pythFeedId);
     res.json({
       price: Number(p.price6dp) / 1e6,
       confidence: Number(p.confidence6dp) / 1e6,
       publishTime: p.publishTime,
+      market: symbol,
     });
   } catch (e) {
     res.status(500).json({ error: String(e) });

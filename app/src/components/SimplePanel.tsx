@@ -6,15 +6,22 @@ import { API_BASE } from "../config";
 import { describeTransaction } from "../lib/tx-description";
 
 const MARKETS = [
-  { symbol: "SOL-PERP", label: "SOL" },
-  { symbol: "BTC-PERP", label: "BTC" },
-  { symbol: "ETH-PERP", label: "ETH" },
+  { symbol: "SOL-PERP", label: "SOL", priceKey: "sol" },
+  { symbol: "BTC-PERP", label: "BTC", priceKey: "btc" },
+  { symbol: "ETH-PERP", label: "ETH", priceKey: "eth" },
 ];
 
-export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }> = ({
-  position,
-  solPrice,
-}) => {
+const FEED_TO_MARKET: Record<string, string> = {
+  "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE": "SOL-PERP",
+  "4cSM2e6rvbGQUFiJbqytoVMi5GgghSMr8LwVrT9VPSPo": "BTC-PERP",
+  "42amVS4KgzR9rA28tkVYqVXjq9Qa8dcZQMbH5EYFX6XC": "ETH-PERP",
+};
+
+export const SimplePanel: FC<{
+  positions: PositionView[];
+  prices: Record<string, number>;
+  solPrice: number;
+}> = ({ positions, prices, solPrice }) => {
   const { publicKey, signTransaction, signAllTransactions } = useWallet();
   const { connection } = useConnection();
   const [amount, setAmount] = useState("0.1");
@@ -25,7 +32,14 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
   const [confirm, setConfirm] = useState<{ side: "Long" | "Short"; desc: string } | null>(null);
   const [optimistic, setOptimistic] = useState<{ side: string; value: number } | null>(null);
 
-  const estValue = Number(amount) * solPrice * leverage;
+  const marketInfo = MARKETS.find(m => m.symbol === market) || MARKETS[0];
+  const markPrice = prices[marketInfo.priceKey] || solPrice;
+  // Collateral is SOL, so value = SOL amount * SOL price * leverage
+  const collateralValue = Number(amount) * solPrice;
+  const estValue = collateralValue * leverage;
+
+  // Find position for current market
+  const positionForMarket = positions.find(p => FEED_TO_MARKET[p.perpMarket] === market);
 
   const sendTx = async (endpoint: string, body: any) => {
     if (!publicKey || !signTransaction) throw new Error("Connect wallet first");
@@ -74,14 +88,12 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
     setConfirm(null);
     setBusy(true);
     setStatus(null);
-    setOptimistic({ side, value: Number(amount) * solPrice * leverage });
+    setOptimistic({ side, value: estValue });
     try {
       const lamports = BigInt(Math.floor(Number(amount) * 1e9));
-      const borrow = BigInt(Math.floor(Number(amount) * solPrice * (leverage - 1) * 1e6));
       await sendTx("/build-tx/open", {
         wallet: publicKey.toBase58(),
         collateralAmount: lamports.toString(),
-        borrowAmount: borrow.toString(),
         side,
         leverageBps: leverage * 1000,
         hedgeAmount: "0",
@@ -104,7 +116,7 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
     setBusy(true);
     setStatus(null);
     try {
-      await sendTx("/build-tx/close", { wallet: publicKey.toBase58(), useKamino: false });
+      await sendTx("/build-tx/close", { wallet: publicKey.toBase58(), useKamino: false, market });
       setStatus("Position closed");
     } catch (e: any) {
       setStatus(e.message ?? String(e));
@@ -114,7 +126,7 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
   };
 
   // Optimistic confirmation banner
-  if (optimistic && !position?.isOpen) {
+  if (optimistic && !positionForMarket?.isOpen) {
     return (
       <div className="border border-indigo-500/50 rounded-xl p-5 animate-pulse">
         <div className="flex items-center gap-2 mb-2">
@@ -123,7 +135,7 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
         </div>
         <div className="text-2xl font-mono font-bold">
           ${optimistic.value.toFixed(2)}
-          <span className="text-sm text-slate-500 ml-2">{optimistic.side} SOL</span>
+          <span className="text-sm text-slate-500 ml-2">{optimistic.side} {marketInfo.label}</span>
         </div>
         <div className="text-xs text-slate-500 mt-1">
           Transaction sent — waiting for block confirmation
@@ -132,26 +144,44 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
     );
   }
 
-  // Open position view
-  if (position?.isOpen) {
-    const pnlRaw = (solPrice - Number(position.entryPrice) / 1e6) *
-      (Number(position.perpSize) / 1e9) *
-      (position.perpSide === 0 ? 1 : -1);
-    const pnlPct = (pnlRaw / (Number(position.collateralAmount) / 1e9 * solPrice)) * 100;
+  // Open position view for this market
+  if (positionForMarket?.isOpen) {
+    const pos = positionForMarket;
+    const entryPrice = Number(pos.entryPrice) / 1e6;
+    const pnlRaw = (markPrice - entryPrice) *
+      (Number(pos.perpSize) / 1e6 / markPrice) *
+      (pos.perpSide === 0 ? 1 : -1);
+    const collValue = Number(pos.collateralAmount) / 1e9 * solPrice;
+    const pnlPct = collValue > 0 ? (pnlRaw / collValue) * 100 : 0;
 
     return (
       <div className="border border-slate-800 rounded-xl p-5 space-y-4">
         <div className="flex items-center justify-between">
-          <span className="text-sm font-medium">Your Position</span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">Your {marketInfo.label} Position</span>
+            <div className="flex gap-1">
+              {MARKETS.map(m => (
+                <button
+                  key={m.symbol}
+                  onClick={() => setMarket(m.symbol)}
+                  className={`px-2 py-0.5 text-xs rounded-md ${
+                    market === m.symbol
+                      ? "bg-indigo-600 text-white"
+                      : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                  }`}
+                >{m.label}</button>
+              ))}
+            </div>
+          </div>
           <span className={`text-sm font-mono ${pnlRaw >= 0 ? "text-green-400" : "text-red-400"}`}>
             {pnlRaw >= 0 ? "+" : ""}{pnlPct.toFixed(2)}%
           </span>
         </div>
 
         <div className="text-2xl font-mono font-bold">
-          ${(Number(position.collateralAmount) / 1e9 * solPrice).toFixed(2)}
+          ${collValue.toFixed(2)}
           <span className="text-sm text-slate-500 ml-2">
-            {position.perpSide === 0 ? "Long" : "Short"} SOL
+            {pos.perpSide === 0 ? "Long" : "Short"} {marketInfo.label}
           </span>
         </div>
 
@@ -172,20 +202,30 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
       <div className="flex items-center justify-between">
         <span className="text-sm text-slate-400">Start Trading</span>
         <div className="flex gap-1">
-          {MARKETS.map(m => (
-            <button
-              key={m.symbol}
-              onClick={() => setMarket(m.symbol)}
-              className={`px-2.5 py-1 text-xs rounded-md font-medium ${
-                market === m.symbol
-                  ? "bg-indigo-600 text-white"
-                  : "bg-slate-800 text-slate-400 hover:bg-slate-700"
-              }`}
-            >
-              {m.label}
-            </button>
-          ))}
+          {MARKETS.map(m => {
+            const hasPosition = positions.some(p => FEED_TO_MARKET[p.perpMarket] === m.symbol && p.isOpen);
+            return (
+              <button
+                key={m.symbol}
+                onClick={() => setMarket(m.symbol)}
+                className={`px-2.5 py-1 text-xs rounded-md font-medium ${
+                  market === m.symbol
+                    ? "bg-indigo-600 text-white"
+                    : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                }`}
+              >
+                {m.label}
+                {hasPosition && <span className="ml-1 text-green-400">*</span>}
+              </button>
+            );
+          })}
         </div>
+      </div>
+
+      <div className="text-xs text-slate-500 text-center">
+        {marketInfo.label} Price: <span className="font-mono text-white">
+          ${markPrice < 100 ? markPrice.toFixed(2) : markPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+        </span>
       </div>
 
       <div>
@@ -248,14 +288,14 @@ export const SimplePanel: FC<{ position: PositionView | null; solPrice: number }
             disabled={!publicKey || busy}
             className="flex-1 bg-green-600 hover:bg-green-700 disabled:opacity-40 rounded-lg py-2.5 text-sm font-bold"
           >
-            {busy ? "..." : "Go Long"}
+            {busy ? "..." : `Long ${marketInfo.label}`}
           </button>
           <button
             onClick={() => requestOpen("Short")}
             disabled={!publicKey || busy}
             className="flex-1 bg-red-600 hover:bg-red-700 disabled:opacity-40 rounded-lg py-2.5 text-sm font-bold"
           >
-            {busy ? "..." : "Go Short"}
+            {busy ? "..." : `Short ${marketInfo.label}`}
           </button>
         </div>
       )}

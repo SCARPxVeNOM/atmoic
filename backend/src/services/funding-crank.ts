@@ -24,7 +24,7 @@ export const fundingCrankStats = {
   errors: 0,
 };
 
-async function fetchOpenPositions(): Promise<{ owner: PublicKey; pubkey: PublicKey }[]> {
+async function fetchOpenPositions(): Promise<{ owner: PublicKey; pubkey: PublicKey; perpMarket: PublicKey }[]> {
   const accounts = await connection.getProgramAccounts(programId, {
     filters: [
       // Position accounts: INIT_SPACE = 187 bytes + 8 byte discriminator = 195
@@ -32,12 +32,12 @@ async function fetchOpenPositions(): Promise<{ owner: PublicKey; pubkey: PublicK
     ],
   });
 
-  const positions: { owner: PublicKey; pubkey: PublicKey }[] = [];
+  const positions: { owner: PublicKey; pubkey: PublicKey; perpMarket: PublicKey }[] = [];
   for (const { pubkey, account } of accounts) {
     try {
       const pos = decodePosition(account.data);
       if (pos.isOpen) {
-        positions.push({ owner: pos.owner, pubkey });
+        positions.push({ owner: pos.owner, pubkey, perpMarket: pos.perpMarket });
       }
     } catch {
       // Not a position account or corrupted — skip
@@ -96,13 +96,13 @@ async function runFundingRound(): Promise<void> {
     const cranker = loadKeypair();
     let settled = 0;
 
-    for (const { owner } of positions) {
+    for (const { owner, perpMarket } of positions) {
       try {
         const ix = buildSettleFundingIx({
           caller: cranker.publicKey,
           positionOwner: owner,
           fundingRateBps: BigInt(rateBps),
-          pythPriceFeed: new PublicKey(configAcct ? decodeGlobalConfig(configAcct.data).pythSolFeed : "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE"),
+          pythPriceFeed: perpMarket,
         });
 
         const { blockhash } = await connection.getLatestBlockhash();

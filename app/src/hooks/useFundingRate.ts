@@ -8,21 +8,21 @@ export interface FundingView {
   nextUpdate: number;
 }
 
-export function useFundingRate(pollMs = 30000) {
+export function useFundingRate(market: string = "sol", pollMs = 30000) {
   const [funding, setFunding] = useState<FundingView | null>(null);
 
   useEffect(() => {
     let alive = true;
     const tick = async () => {
       try {
-        const r = await fetch(`${API_BASE}/funding/sol`);
+        const r = await fetch(`${API_BASE}/funding/${market}`);
         if (r.ok && alive) setFunding(await r.json());
       } catch { /* endpoint not available yet */ }
     };
     tick();
     const id = setInterval(tick, pollMs);
     return () => { alive = false; clearInterval(id); };
-  }, [pollMs]);
+  }, [market, pollMs]);
 
   return funding;
 }
