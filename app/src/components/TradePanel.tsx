@@ -59,6 +59,7 @@ export function TradePanel({
   const [col, setCol] = useState("SOL");
   const [amount, setAmount] = useState("0.5");
   const [leverage, setLeverage] = useState(5);
+  const [powerMode, setPowerMode] = useState(false); // Power perp (squeeth)
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [confirmDesc, setConfirmDesc] = useState<string | null>(null);
@@ -212,6 +213,7 @@ export function TradePanel({
         leverageBps: leverage * 1000,
         collateralType: col,
         market: perpMarket,
+        power: powerMode ? 2000 : 1000,
       });
       setStatus(`Opened: ${sig.slice(0, 8)}...`);
       setOptimistic(null);
@@ -328,6 +330,47 @@ export function TradePanel({
             fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, marginTop: 5,
           }}>{leverage.toFixed(1)}x</div>
         </div>
+
+        {/* Power Perp Toggle */}
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          padding: "8px 12px", borderRadius: 8,
+          background: powerMode ? "#1a0a2e" : "#161b22",
+          border: `1px solid ${powerMode ? "#7c3aed" : "#30363d"}`,
+          transition: "all 0.2s",
+        }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: powerMode ? "#a78bfa" : "#8b949e" }}>
+              Power Mode (x{"\u00B2"})
+            </div>
+            <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2 }}>
+              {powerMode ? "Convex payoff: amplified gains & losses" : "Options-like exposure without expiry"}
+            </div>
+          </div>
+          <button
+            onClick={() => setPowerMode(v => !v)}
+            style={{
+              width: 40, height: 22, borderRadius: 11, border: "none", cursor: "pointer",
+              background: powerMode ? "#7c3aed" : "#30363d", position: "relative",
+              transition: "background 0.2s",
+            }}
+          >
+            <div style={{
+              width: 16, height: 16, borderRadius: 8, background: "#fff",
+              position: "absolute", top: 3,
+              left: powerMode ? 21 : 3, transition: "left 0.2s",
+            }} />
+          </button>
+        </div>
+        {powerMode && (
+          <div style={{
+            fontSize: 10, color: "#f59e0b", padding: "6px 10px",
+            background: "#1c1507", borderRadius: 6, border: "1px solid #854d0e30",
+          }}>
+            2x spread fee applies. If SOL +10%: Standard +10%, Power +21%.
+            {leverage > 5 && " Max 5x leverage recommended for power perps."}
+          </div>
+        )}
 
         {/* Pro mode: Vault risk info */}
         {showProData && vaultRisk && (

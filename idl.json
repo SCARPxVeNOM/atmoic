@@ -1,0 +1,238 @@
+{
+  "version": "0.2.0",
+  "name": "atomic_perps",
+  "metadata": {
+    "address": "8s677udBiKHkCNYzGEroenfN23k1vQjqR3JQvHjZcDWg",
+    "description": "Composable perpetual futures on Solana — power perps (squeeth), portfolio margining, self-repaying positions, gradual deleveraging, multi-collateral, DFBA pricing, formal verification"
+  },
+  "instructions": [
+    {
+      "name": "initialize",
+      "discriminator": [175, 175, 109, 31, 13, 152, 155, 237],
+      "accounts": [
+        { "name": "authority", "isMut": true, "isSigner": true },
+        { "name": "globalConfig", "isMut": true, "isSigner": false },
+        { "name": "programAuthority", "isMut": false, "isSigner": false },
+        { "name": "solVault", "isMut": false, "isSigner": false },
+        { "name": "usdcReserve", "isMut": false, "isSigner": false },
+        { "name": "systemProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "feeRecipient", "type": "publicKey" },
+        { "name": "pythSolFeed", "type": "publicKey" },
+        { "name": "solMint", "type": "publicKey" },
+        { "name": "usdcMint", "type": "publicKey" },
+        { "name": "maxLeverage", "type": "u64" },
+        { "name": "liquidationThreshold", "type": "u64" },
+        { "name": "protocolFeeBps", "type": "u64" },
+        { "name": "maxTvl", "type": "u64" }
+      ]
+    },
+    {
+      "name": "atomicOpen",
+      "discriminator": [47, 210, 223, 241, 56, 134, 138, 28],
+      "accounts": [
+        { "name": "user", "isMut": true, "isSigner": true },
+        { "name": "globalConfig", "isMut": true, "isSigner": false },
+        { "name": "position", "isMut": true, "isSigner": false },
+        { "name": "pythPriceFeed", "isMut": false, "isSigner": false },
+        { "name": "collateralVault", "isMut": true, "isSigner": false },
+        { "name": "userCollateralAccount", "isMut": true, "isSigner": false },
+        { "name": "feeRecipientAccount", "isMut": true, "isSigner": false },
+        { "name": "programAuthority", "isMut": false, "isSigner": false },
+        { "name": "tokenProgram", "isMut": false, "isSigner": false },
+        { "name": "systemProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "collateralAmount", "type": "u64" },
+        { "name": "perpSide", "type": "u8" },
+        { "name": "leverageBps", "type": "u64" },
+        { "name": "spreadFeeBps", "type": "u16" },
+        { "name": "collateralType", "type": "u8" },
+        { "name": "collateralPrice6dp", "type": "u64" },
+        { "name": "powerMilli", "type": { "option": "u16" } }
+      ]
+    },
+    {
+      "name": "atomicClose",
+      "discriminator": [6, 88, 163, 206, 34, 52, 183, 230],
+      "accounts": [
+        { "name": "user", "isMut": true, "isSigner": true },
+        { "name": "globalConfig", "isMut": true, "isSigner": false },
+        { "name": "position", "isMut": true, "isSigner": false },
+        { "name": "pythPriceFeed", "isMut": false, "isSigner": false },
+        { "name": "collateralVault", "isMut": true, "isSigner": false },
+        { "name": "userCollateralAccount", "isMut": true, "isSigner": false },
+        { "name": "feeRecipientAccount", "isMut": true, "isSigner": false },
+        { "name": "programAuthority", "isMut": false, "isSigner": false },
+        { "name": "tokenProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "closeBps", "type": "u16" },
+        { "name": "collateralPrice6dp", "type": "u64" }
+      ]
+    },
+    {
+      "name": "liquidate",
+      "discriminator": [223, 179, 226, 125, 48, 46, 39, 74],
+      "accounts": [
+        { "name": "liquidator", "isMut": true, "isSigner": true },
+        { "name": "globalConfig", "isMut": true, "isSigner": false },
+        { "name": "position", "isMut": true, "isSigner": false },
+        { "name": "pythPriceFeed", "isMut": false, "isSigner": false },
+        { "name": "collateralVault", "isMut": true, "isSigner": false },
+        { "name": "liquidatorCollateralAccount", "isMut": true, "isSigner": false },
+        { "name": "feeRecipientCollateralAccount", "isMut": true, "isSigner": false },
+        { "name": "programAuthority", "isMut": false, "isSigner": false },
+        { "name": "tokenProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "collateralPrice6dp", "type": "u64" }
+      ]
+    },
+    {
+      "name": "updateConfig",
+      "discriminator": [29, 158, 252, 191, 10, 83, 219, 99],
+      "accounts": [
+        { "name": "authority", "isMut": false, "isSigner": true },
+        { "name": "globalConfig", "isMut": true, "isSigner": false }
+      ],
+      "args": [
+        { "name": "newAuthority", "type": "publicKey" },
+        { "name": "newFeeRecipient", "type": "publicKey" },
+        { "name": "protocolFeeBps", "type": "u64" },
+        { "name": "maxLeverage", "type": "u64" },
+        { "name": "liquidationThreshold", "type": "u64" },
+        { "name": "maxTvl", "type": "u64" },
+        { "name": "isPaused", "type": "u8" }
+      ]
+    },
+    {
+      "name": "migrateConfig",
+      "discriminator": [92, 131, 58, 105, 210, 154, 224, 193],
+      "accounts": [
+        { "name": "authority", "isMut": true, "isSigner": true },
+        { "name": "globalConfig", "isMut": true, "isSigner": false },
+        { "name": "systemProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": []
+    },
+    {
+      "name": "settleFunding",
+      "discriminator": [162, 179, 196, 213, 230, 247, 8, 25],
+      "accounts": [
+        { "name": "caller", "isMut": false, "isSigner": true },
+        { "name": "globalConfig", "isMut": true, "isSigner": false },
+        { "name": "position", "isMut": true, "isSigner": false },
+        { "name": "pythPriceFeed", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "fundingRateBps", "type": "i64" }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "GlobalConfig",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "authority", "type": "publicKey" },
+          { "name": "feeRecipient", "type": "publicKey" },
+          { "name": "pythSolFeed", "type": "publicKey" },
+          { "name": "solMint", "type": "publicKey" },
+          { "name": "usdcMint", "type": "publicKey" },
+          { "name": "solVault", "type": "publicKey" },
+          { "name": "usdcReserve", "type": "publicKey" },
+          { "name": "isPaused", "type": "bool" },
+          { "name": "maxLeverage", "type": "u64" },
+          { "name": "liquidationThreshold", "type": "u64" },
+          { "name": "protocolFeeBps", "type": "u64" },
+          { "name": "maxTvl", "type": "u64" },
+          { "name": "totalUsdcBorrowed", "type": "u64" },
+          { "name": "totalUsdcReserve", "type": "u64" },
+          { "name": "bump", "type": "u8" },
+          { "name": "programAuthorityBump", "type": "u8" },
+          { "name": "totalLongOi", "type": "u64" },
+          { "name": "totalShortOi", "type": "u64" },
+          { "name": "psfBalance", "type": "u64" },
+          { "name": "jlpMint", "type": "publicKey" },
+          { "name": "jlpVault", "type": "publicKey" },
+          { "name": "msolMint", "type": "publicKey" },
+          { "name": "msolVault", "type": "publicKey" },
+          { "name": "pythMsolFeed", "type": "publicKey" },
+          { "name": "stressActive", "type": "bool" },
+          { "name": "totalCorrelatedCollateral", "type": "u64" },
+          { "name": "totalCollateral", "type": "u64" },
+          { "name": "lastFundingAt", "type": "i64" },
+          { "name": "accumulatedFunding", "type": "i64" }
+        ]
+      }
+    },
+    {
+      "name": "Position",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "owner", "type": "publicKey" },
+          { "name": "perpMarket", "type": "publicKey" },
+          { "name": "collateralMint", "type": "publicKey" },
+          { "name": "kaminoObligation", "type": "publicKey" },
+          { "name": "collateralAmount", "type": "u64" },
+          { "name": "borrowAmountUsdc", "type": "u64" },
+          { "name": "perpSide", "type": "u8" },
+          { "name": "perpSize", "type": "u64" },
+          { "name": "entryPrice", "type": "u64" },
+          { "name": "openedAt", "type": "i64" },
+          { "name": "powerMilli", "type": "u64" },
+          { "name": "collateralEntryPrice", "type": "u64" },
+          { "name": "isOpen", "type": "bool" },
+          { "name": "bump", "type": "u8" }
+        ]
+      }
+    }
+  ],
+  "types": [
+    {
+      "name": "Side",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "Long" },
+          { "name": "Short" }
+        ]
+      }
+    }
+  ],
+  "errors": [
+    { "code": 6000, "name": "OracleStale", "msg": "Oracle price is stale" },
+    { "code": 6001, "name": "OracleConfidenceTooWide", "msg": "Oracle confidence interval too wide" },
+    { "code": 6002, "name": "InvalidOracleFeed", "msg": "Invalid oracle feed account" },
+    { "code": 6003, "name": "ExcessiveLeverage", "msg": "Leverage exceeds maximum allowed" },
+    { "code": 6004, "name": "InsufficientCollateral", "msg": "Insufficient collateral" },
+    { "code": 6005, "name": "PositionUnhealthy", "msg": "Position is unhealthy" },
+    { "code": 6006, "name": "PositionHealthy", "msg": "Position is still healthy, cannot liquidate" },
+    { "code": 6007, "name": "PositionNotOpen", "msg": "Position is not open" },
+    { "code": 6008, "name": "TVLCapExceeded", "msg": "TVL cap exceeded" },
+    { "code": 6009, "name": "ProtocolPaused", "msg": "Protocol is paused" },
+    { "code": 6010, "name": "Unauthorized", "msg": "Unauthorized" },
+    { "code": 6011, "name": "InvalidProgramId", "msg": "Invalid program ID" },
+    { "code": 6012, "name": "MathOverflow", "msg": "Math overflow" },
+    { "code": 6013, "name": "InvalidCollateralMint", "msg": "Invalid collateral mint" },
+    { "code": 6014, "name": "BadInput", "msg": "Bad input" },
+    { "code": 6015, "name": "FillsSuspended", "msg": "Fills suspended" },
+    { "code": 6016, "name": "QueueFull", "msg": "Queue full" },
+    { "code": 6017, "name": "CommitmentNotFound", "msg": "Commitment not found" },
+    { "code": 6018, "name": "CommitmentAlreadyRevealed", "msg": "Commitment already revealed" },
+    { "code": 6019, "name": "HashMismatch", "msg": "Hash mismatch" },
+    { "code": 6020, "name": "OrderNotFound", "msg": "Order not found" },
+    { "code": 6021, "name": "NoBidsOrAsks", "msg": "No bids or asks" },
+    { "code": 6022, "name": "StressActive", "msg": "Stress mode active" },
+    { "code": 6023, "name": "CorrelatedCapExceeded", "msg": "Correlated collateral cap exceeded" },
+    { "code": 6024, "name": "JlpPriceOutOfRange", "msg": "JLP price out of sanity range" },
+    { "code": 6025, "name": "LiquidationGracePeriod", "msg": "Liquidation grace period active" },
+    { "code": 6026, "name": "FundingTooSoon", "msg": "Funding settlement too soon" },
+    { "code": 6027, "name": "FundingRateExceedsMax", "msg": "Funding rate exceeds maximum" },
+    { "code": 6028, "name": "OracleDivergence", "msg": "Oracle divergence between Pyth and Switchboard" }
+  ]
+}

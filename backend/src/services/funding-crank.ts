@@ -7,11 +7,12 @@ import {
 import pino from "pino";
 
 import { connection, loadKeypair, programId } from "../lib/connection";
-import { findConfigPda } from "../lib/pdas";
+import { findConfigPda, findPositionPda } from "../lib/pdas";
 import { decodeGlobalConfig, decodePosition } from "../lib/decode";
 import { fetchLatestPrice } from "../lib/pyth";
 import { compute8hTwap, computeFundingRate } from "../lib/funding";
 import { buildSettleFundingIx } from "../lib/ix-builders";
+import { getCollateralYield, computeNetFundingBps } from "../lib/yield-tracker";
 
 const log = pino({ transport: { target: "pino-pretty" } } as any);
 
@@ -98,10 +99,29 @@ async function runFundingRound(): Promise<void> {
 
     for (const { owner, perpMarket } of positions) {
       try {
+        // Self-repaying perps: compute yield offset for yield-bearing collateral
+        let effectiveRateBps = rateBps;
+        try {
+          const [posPda] = findPositionPda(owner, perpMarket);
+          const posAcct = await connection.getAccountInfo(posPda);
+          if (posAcct) {
+            const posData = decodePosition(posAcct.data);
+            const collMint = posData.collateralMint.toBase58();
+            const yieldInfo = await getCollateralYield(collMint, price6dp);
+            if (yieldInfo.rate8hBps > 0) {
+              const { netBps } = computeNetFundingBps(rateBps, yieldInfo.rate8hBps);
+              log.debug({ owner: owner.toBase58(), rawBps: rateBps, yieldBps: yieldInfo.rate8hBps, netBps }, "yield-offset funding");
+              effectiveRateBps = netBps;
+            }
+          }
+        } catch (e: any) {
+          log.debug({ owner: owner.toBase58(), err: e.message }, "yield offset lookup failed, using raw rate");
+        }
+
         const ix = buildSettleFundingIx({
           caller: cranker.publicKey,
           positionOwner: owner,
-          fundingRateBps: BigInt(rateBps),
+          fundingRateBps: BigInt(effectiveRateBps),
           pythPriceFeed: perpMarket,
         });
 

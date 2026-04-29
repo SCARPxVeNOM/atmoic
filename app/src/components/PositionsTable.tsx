@@ -24,6 +24,8 @@ function getCollateralDecimals(collateralMint: string): number {
   return collateralMint === JLP_MINT ? 6 : 9;
 }
 
+type DeleverageZone = "safe" | "zone1" | "zone2" | "zone3" | "full";
+
 interface DisplayPosition {
   market: string;
   marketSymbol: string;
@@ -37,6 +39,10 @@ interface DisplayPosition {
   pnlPct: number;
   marginRatio: number;
   marginCol: string;
+  isPower: boolean;
+  deleverageZone: DeleverageZone;
+  deleverageBadge: string;
+  deleverageBadgeCol: string;
 }
 
 function toDisplay(p: PositionView, prices: Record<string, number>, fallbackPrice: number): DisplayPosition {
@@ -57,13 +63,37 @@ function toDisplay(p: PositionView, prices: Record<string, number>, fallbackPric
   const margin = collNative * solPrice;
   const lv = margin > 0 ? Math.round(notionalUsd / margin) : 1;
 
-  const priceDelta = side === "Long" ? markPrice - entry : entry - markPrice;
-  const pnlRaw = entry > 0 ? (priceDelta / entry) * notionalUsd : 0;
+  // Power-aware PnL
+  const power = p.powerMilli || 0;
+  const isPower = power === 2000;
+  let pnlRaw: number;
+  if (isPower && entry > 0) {
+    // Squeeth: pnl = (exit² - entry²) / entry² * size
+    const exitSq = markPrice * markPrice;
+    const entrySq = entry * entry;
+    const delta = (exitSq - entrySq) / entrySq;
+    const sideMul = side === "Long" ? 1 : -1;
+    pnlRaw = delta * notionalUsd * sideMul;
+  } else {
+    const priceDelta = side === "Long" ? markPrice - entry : entry - markPrice;
+    pnlRaw = entry > 0 ? (priceDelta / entry) * notionalUsd : 0;
+  }
   const pnlPct = margin > 0 ? (pnlRaw / margin) * 100 : 0;
 
   const marginRatio = notionalUsd > 0 ? margin / notionalUsd : 99;
   const marginPct = marginRatio * 100;
   const marginCol = marginPct > 15 ? "#3fb68b" : marginPct > 8 ? "#d29922" : "#ff5353";
+
+  // Deleverage zone classification
+  const dlZone: DeleverageZone =
+    marginPct >= 5 ? "safe" :
+    marginPct >= 4 ? "zone1" :
+    marginPct >= 3 ? "zone2" :
+    marginPct >= 2 ? "zone3" : "full";
+  const dlBadge = dlZone === "safe" ? "SAFE" : dlZone === "zone1" ? "DL 25%" :
+    dlZone === "zone2" ? "DL 50%" : dlZone === "zone3" ? "DL 75%" : "LIQ";
+  const dlColor = dlZone === "safe" ? "#3fb68b" : dlZone === "zone1" ? "#d29922" :
+    dlZone === "zone2" ? "#f59e0b" : dlZone === "zone3" ? "#ff5353" : "#991b1b";
 
   return {
     market: marketLabel,
@@ -78,6 +108,10 @@ function toDisplay(p: PositionView, prices: Record<string, number>, fallbackPric
     pnlPct,
     marginRatio,
     marginCol,
+    isPower,
+    deleverageZone: dlZone,
+    deleverageBadge: dlBadge,
+    deleverageBadgeCol: dlColor,
   };
 }
 
@@ -206,7 +240,10 @@ export function PositionsTable({
               <tbody>
                 {displayPositions.map((p, i) => (
                   <tr key={i} style={{ borderBottom: "1px solid #161b22" }}>
-                    <td style={{ padding: "8px 12px", color: "#e6edf3", fontWeight: 600 }}>{p.market}</td>
+                    <td style={{ padding: "8px 12px", color: "#e6edf3", fontWeight: 600 }}>
+                      {p.market}
+                      {p.isPower && <span style={{ marginLeft: 4, fontSize: 10, color: "#a78bfa", background: "#1a0a2e", padding: "1px 4px", borderRadius: 3 }}>{"\u00B2"}</span>}
+                    </td>
                     <td style={{ padding: "8px 12px" }}>
                       <span style={{
                         color: p.side === "Long" ? "#3fb68b" : "#ff5353",
@@ -234,9 +271,16 @@ export function PositionsTable({
                       </div>
                     </td>
                     <td style={{ padding: "8px 12px" }}>
-                      <span style={{ fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: p.marginCol }}>
-                        {(p.marginRatio * 100).toFixed(1)}%
-                      </span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <span style={{ fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: p.marginCol }}>
+                          {(p.marginRatio * 100).toFixed(1)}%
+                        </span>
+                        <span style={{
+                          fontSize: 8, fontWeight: 700, padding: "1px 4px", borderRadius: 3,
+                          color: p.deleverageBadgeCol,
+                          background: `${p.deleverageBadgeCol}18`,
+                        }}>{p.deleverageBadge}</span>
+                      </div>
                     </td>
                     <td style={{ padding: "8px 12px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>

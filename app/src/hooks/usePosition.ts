@@ -11,10 +11,13 @@ export interface PositionView {
   perpSide: number;
   perpSize: string;
   entryPrice: string;
-  hedgeAmount: string;
+  /** Power parameter: 0|1000=standard, 2000=squeeth. Formerly hedgeAmount. */
+  powerMilli: number;
   collateralEntryPrice: string;
   isOpen: boolean;
 }
+
+export type DeleverageZone = "safe" | "zone1" | "zone2" | "zone3" | "full";
 
 export interface HealthView {
   markPrice: number;
@@ -24,6 +27,8 @@ export interface HealthView {
   pnlUsdc: string;
   healthFactorBps: string;
   liquidatable: boolean;
+  deleverageZone?: DeleverageZone;
+  deleveragePct?: number;
 }
 
 /** Fetch all open positions for the connected wallet. */

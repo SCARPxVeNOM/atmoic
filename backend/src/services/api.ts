@@ -49,6 +49,8 @@ import { fetchJlpPrice } from "../lib/jlp";
 import { CollateralType } from "../lib/haircuts";
 import { checkCollateralCap, CollateralTotals } from "../lib/collateral-caps";
 import { msolState } from "./msol-monitor";
+import { getCollateralYield } from "../lib/yield-tracker";
+import { computePortfolioMargin } from "../lib/portfolio-margin";
 
 const log = pino({ transport: { target: "pino-pretty" } } as any);
 
@@ -154,6 +156,62 @@ app.get("/position/:wallet/:market/health", async (req, res) => {
   }
 });
 
+// ----- Portfolio Margin (scenario-based cross-position health) -----
+app.get("/portfolio/:wallet/health", async (req, res) => {
+  try {
+    const wallet = new PublicKey(req.params.wallet);
+    // Fetch all open positions
+    const accounts = await connection.getProgramAccounts(programId, {
+      filters: [
+        { dataSize: 195 },
+        { memcmp: { offset: 8, bytes: wallet.toBase58() } },
+      ],
+    });
+    const positions = accounts
+      .map(({ account }) => { try { return decodePosition(account.data); } catch { return null; } })
+      .filter((p): p is NonNullable<typeof p> => p !== null && p.isOpen);
+
+    // Fetch prices for all markets
+    const feedIds: Record<string, string> = {
+      "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE": "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d",
+      "4cSM2e6rvbGQUFiJbqytoVMi5GgghSMr8LwVrT9VPSPo": "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
+      "42amVS4KgzR9rA28tkVYqVXjq9Qa8dcZQMbH5EYFX6XC": "ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace",
+    };
+    const prices: Record<string, number> = {};
+    for (const [pubkey, feedId] of Object.entries(feedIds)) {
+      try {
+        const { price6dp } = await fetchLatestPrice(feedId);
+        prices[pubkey] = Number(price6dp) / 1e6;
+      } catch { /* skip */ }
+    }
+
+    const result = computePortfolioMargin(positions, prices);
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: String(e) });
+  }
+});
+
+// ----- Yield Rate per Collateral Type -----
+app.get("/yield/:collateral", async (req, res) => {
+  try {
+    const collateral = req.params.collateral.toUpperCase();
+    const mintMap: Record<string, string> = {
+      SOL: "So11111111111111111111111111111111111111112",
+      JLP: "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4",
+      MSOL: "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",
+    };
+    const mint = mintMap[collateral];
+    if (!mint) return res.status(400).json({ error: `Unknown collateral: ${collateral}` });
+
+    const { price6dp } = await fetchLatestPrice();
+    const yieldInfo = await getCollateralYield(mint, price6dp);
+    res.json(yieldInfo);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 app.get("/vault/risk", async (_req, res) => {
   try {
     const config = await loadConfig();
@@ -229,6 +287,7 @@ app.post("/build-tx/open", async (req, res) => {
       leverageBps,
       market = "SOL-PERP",
       collateralType = "SOL",   // "SOL" | "JLP" | "mSOL"
+      power = 1000,             // 1000=standard, 2000=squeeth
     } = req.body ?? {};
     if (!wallet || !collateralAmount || !side || !leverageBps) {
       return res.status(400).json({ error: "missing required field" });
@@ -348,6 +407,7 @@ app.post("/build-tx/open", async (req, res) => {
       spreadFeeBps: risk.spreadBps,
       collateralType: collTypeNum,
       collateralPrice: collateralPrice6dp,
+      powerMilli: Number(power),
     });
 
     const [{ blockhash, lastValidBlockHeight }, lookupTables] = await Promise.all([

@@ -125,8 +125,9 @@ pub fn process(
         .checked_pow(coll_decimals as u32)
         .ok_or(AtomicPerpsError::MathOverflow)?;
 
-    // -------- 3. PnL on closing portion --------
-    let pnl = calculate_pnl(entry_price, exit_price, closing_size, &perp_side)?;
+    // -------- 3. PnL on closing portion (power-aware) --------
+    let power = position.power_milli;
+    let pnl = crate::utils::math::calculate_pnl_power(entry_price, exit_price, closing_size, &perp_side, power)?;
 
     let pnl_in_collateral_abs: u64 = if pnl == 0 { 0 } else {
         checked_mul_div(pnl.unsigned_abs(), pow, collateral_price.max(1))?

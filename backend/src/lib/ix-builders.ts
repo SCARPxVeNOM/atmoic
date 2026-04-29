@@ -107,6 +107,7 @@ export interface AtomicOpenArgs {
   spreadFeeBps: number;
   collateralType?: number;       // 0=SOL, 1=JLP, 2=mSOL
   collateralPrice?: bigint;      // JLP/mSOL price 6dp; 0 for SOL
+  powerMilli?: number;           // 1000=standard (default), 2000=squeeth
 }
 
 export function buildAtomicOpenIx(args: AtomicOpenArgs): TransactionInstruction {
@@ -115,7 +116,8 @@ export function buildAtomicOpenIx(args: AtomicOpenArgs): TransactionInstruction 
   const [position] = findPositionPda(args.user, args.pythPriceFeed);
 
   const collType = args.collateralType ?? 0;
-  const data = Buffer.concat([
+  const power = args.powerMilli ?? 1000;
+  const parts: Buffer[] = [
     discriminator("atomic_open"),
     writeU64LE(args.collateralAmount),
     writeU8(args.perpSide),
@@ -123,7 +125,12 @@ export function buildAtomicOpenIx(args: AtomicOpenArgs): TransactionInstruction 
     writeU16LE(args.spreadFeeBps),
     writeU8(collType),
     writeU64LE(args.collateralPrice ?? BigInt(0)),
-  ]);
+  ];
+  // Append optional power_milli (u16) for non-standard perps
+  if (power !== 1000) {
+    parts.push(writeU16LE(power));
+  }
+  const data = Buffer.concat(parts);
 
   const keys = [
     { pubkey: args.user, isSigner: true, isWritable: true },

@@ -138,3 +138,23 @@ pub const ORACLE_DIVERGENCE_BPS: u64 = 200; // 2% — halt if Pyth/Switchboard d
 /// At 10x leverage, ~4.5% adverse move triggers liquidation.
 /// At 5x leverage, ~12.5% adverse move triggers liquidation.
 pub const MAINTENANCE_MARGIN_BPS: u64 = 500;
+
+// === Power Perpetuals ===
+
+/// Standard perp: p=1.0 → linear PnL
+pub const DEFAULT_POWER_MILLI: u64 = 1_000;
+/// Squeeth perp: p=2.0 → quadratic PnL (options-like convexity)
+pub const POWER_SQUEETH: u64 = 2_000;
+/// Sqrt perp: p=0.5 → dampened exposure (stretch goal)
+pub const POWER_SQRT: u64 = 500;
+
+// === Gradual Deleveraging ===
+// Instead of binary liquidation, partially close positions based on margin severity.
+
+/// Zone 1: margin 4-5% → close 25% of position
+pub const DELEVERAGE_ZONE_1_BPS: u64 = 400;
+/// Zone 2: margin 3-4% → close 50% of position
+pub const DELEVERAGE_ZONE_2_BPS: u64 = 300;
+/// Zone 3: margin 2-3% → close 75% of position
+pub const DELEVERAGE_ZONE_3_BPS: u64 = 200;
+// Below 200 bps (<2%): full liquidation (100%)

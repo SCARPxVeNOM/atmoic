@@ -55,6 +55,64 @@ pub fn calculate_pnl(
     i64::try_from(pnl).map_err(|_| AtomicPerpsError::MathOverflow.into())
 }
 
+/// Power-aware PnL calculation for power perpetuals.
+/// - power_milli=0 or 1000: standard linear PnL (delegates to calculate_pnl)
+/// - power_milli=2000: squeeth — PnL = (exit² - entry²) / entry² * size
+/// Other values fall back to standard.
+pub fn calculate_pnl_power(
+    entry_price: u64,
+    exit_price: u64,
+    size: u64,
+    side: &Side,
+    power_milli: u64,
+) -> Result<i64, ProgramError> {
+    let p = if power_milli == 0 || power_milli == 1000 { 1000u64 } else { power_milli };
+
+    if p == 1000 {
+        return calculate_pnl(entry_price, exit_price, size, side);
+    }
+
+    if p == 2000 {
+        // Squeeth: PnL = (exit² - entry²) / entry² * size, signed by side
+        let exit_sq = (exit_price as u128)
+            .checked_mul(exit_price as u128)
+            .ok_or(AtomicPerpsError::MathOverflow)?;
+        let entry_sq = (entry_price as u128)
+            .checked_mul(entry_price as u128)
+            .ok_or(AtomicPerpsError::MathOverflow)?;
+        if entry_sq == 0 { return Ok(0); }
+
+        let (delta, raw_positive) = if exit_sq >= entry_sq {
+            (exit_sq - entry_sq, true)
+        } else {
+            (entry_sq - exit_sq, false)
+        };
+
+        let pnl_abs = delta
+            .checked_mul(size as u128)
+            .ok_or(AtomicPerpsError::MathOverflow)?
+            .checked_div(entry_sq)
+            .ok_or(AtomicPerpsError::MathOverflow)?;
+
+        let is_profit = match side {
+            Side::Long => raw_positive,
+            Side::Short => !raw_positive,
+        };
+
+        let pnl_signed: i128 = if is_profit {
+            pnl_abs as i128
+        } else {
+            -(pnl_abs as i128)
+        };
+
+        return i64::try_from(pnl_signed)
+            .map_err(|_| AtomicPerpsError::MathOverflow.into());
+    }
+
+    // Unsupported power → fall back to standard perp
+    calculate_pnl(entry_price, exit_price, size, side)
+}
+
 pub fn apply_fee(amount: u64, fee_bps: u64) -> Result<(u64, u64), ProgramError> {
     let fee = checked_mul_div(amount, fee_bps, BPS_DENOMINATOR)?;
     let after = amount

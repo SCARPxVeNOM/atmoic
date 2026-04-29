@@ -27,6 +27,7 @@ export const SimplePanel: FC<{
   const [amount, setAmount] = useState("0.1");
   const [leverage, setLeverage] = useState(2);
   const [market, setMarket] = useState("SOL-PERP");
+  const [powerMode, setPowerMode] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ side: "Long" | "Short"; desc: string } | null>(null);
@@ -100,6 +101,7 @@ export const SimplePanel: FC<{
         useKamino: false,
         collateralType: "SOL",
         market,
+        power: powerMode ? 2000 : 1000,
       });
       setStatus("Position opened");
       setOptimistic(null);
@@ -256,6 +258,31 @@ export const SimplePanel: FC<{
         <div className="flex justify-between text-xs text-slate-600 mt-0.5">
           <span>1x</span><span>5x</span>
         </div>
+      </div>
+
+      {/* Boost Mode (Power Perp) */}
+      <div className={`flex items-center justify-between px-3 py-2.5 rounded-lg border ${
+        powerMode ? "border-purple-500/40 bg-purple-950/20" : "border-slate-700 bg-slate-900"
+      }`}>
+        <div>
+          <span className={`text-xs font-semibold ${powerMode ? "text-purple-400" : "text-slate-400"}`}>
+            Boost Mode (x{"\u00B2"})
+          </span>
+          <p className="text-[10px] text-slate-600 mt-0.5">
+            {powerMode ? "Convex gains + 2x fees" : "Amplified payoff curve"}
+          </p>
+        </div>
+        <button
+          onClick={() => setPowerMode(v => !v)}
+          disabled={!publicKey}
+          className={`w-9 h-5 rounded-full relative transition-colors ${
+            powerMode ? "bg-purple-600" : "bg-slate-700"
+          }`}
+        >
+          <div className={`w-3.5 h-3.5 rounded-full bg-white absolute top-[3px] transition-all ${
+            powerMode ? "left-[18px]" : "left-[3px]"
+          }`} />
+        </button>
       </div>
 
       <div className="text-center text-sm text-slate-400">

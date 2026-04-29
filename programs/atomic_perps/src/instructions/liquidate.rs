@@ -131,8 +131,9 @@ pub fn process(
         .checked_pow(coll_decimals as u32)
         .ok_or(AtomicPerpsError::MathOverflow)?;
 
-    // Compute unrealized PnL
-    let pnl = calculate_pnl(position.entry_price, current_price, position.perp_size, &position.perp_side)?;
+    // Compute unrealized PnL (power-aware)
+    let power = position.power_milli;
+    let pnl = crate::utils::math::calculate_pnl_power(position.entry_price, current_price, position.perp_size, &position.perp_side, power)?;
 
     // Effective collateral = collateral +/- PnL (in collateral token units)
     let effective_coll = if pnl >= 0 {
@@ -160,9 +161,27 @@ pub fn process(
     // Position must be below maintenance margin to be liquidatable
     ensure!(margin_ratio < MAINTENANCE_MARGIN_BPS, AtomicPerpsError::PositionHealthy);
 
-    // -------- 3. Split collateral --------
-    let bonus_amount = checked_mul_div(collateral_amount, LIQUIDATION_BONUS_BPS, BPS_DENOMINATOR)?;
-    let remainder = collateral_amount.saturating_sub(bonus_amount);
+    // -------- 3. Gradual deleveraging — close percentage based on severity --------
+    let close_bps: u64 = if margin_ratio < DELEVERAGE_ZONE_3_BPS {
+        // Below 2%: full liquidation
+        BPS_DENOMINATOR
+    } else if margin_ratio < DELEVERAGE_ZONE_2_BPS {
+        // 2-3%: close 75%
+        7_500
+    } else if margin_ratio < DELEVERAGE_ZONE_1_BPS {
+        // 3-4%: close 50%
+        5_000
+    } else {
+        // 4-5%: close 25%
+        2_500
+    };
+
+    let closing_collateral = checked_mul_div(collateral_amount, close_bps, BPS_DENOMINATOR)?;
+    let closing_size = checked_mul_div(position.perp_size, close_bps, BPS_DENOMINATOR)?;
+
+    // Liquidator bonus on closed portion only
+    let bonus_amount = checked_mul_div(closing_collateral, LIQUIDATION_BONUS_BPS, BPS_DENOMINATOR)?;
+    let remainder = closing_collateral.saturating_sub(bonus_amount);
 
     let authority_bump = config.program_authority_bump;
     let authority_seeds: &[&[u8]] = &[AUTHORITY_SEED, &[authority_bump]];
@@ -180,22 +199,22 @@ pub fn process(
         &position.owner,
         liquidator.key,
         margin_ratio,
-        collateral_amount,
+        closing_collateral,
     );
 
-    // Decrement collateral tracking
-    let deposit_usd = token_to_usd(collateral_amount, position.collateral_entry_price, coll_decimals).unwrap_or(0);
-    config.total_collateral = config.total_collateral.saturating_sub(deposit_usd);
+    // Decrement collateral tracking for closed portion
+    let closing_usd = token_to_usd(closing_collateral, position.collateral_entry_price, coll_decimals).unwrap_or(0);
+    config.total_collateral = config.total_collateral.saturating_sub(closing_usd);
     if is_correlated {
-        config.total_correlated_collateral = config.total_correlated_collateral.saturating_sub(deposit_usd);
+        config.total_correlated_collateral = config.total_correlated_collateral.saturating_sub(closing_usd);
     }
 
     match position.perp_side {
         crate::state::Side::Long => {
-            config.total_long_oi = config.total_long_oi.saturating_sub(position.perp_size);
+            config.total_long_oi = config.total_long_oi.saturating_sub(closing_size);
         }
         crate::state::Side::Short => {
-            config.total_short_oi = config.total_short_oi.saturating_sub(position.perp_size);
+            config.total_short_oi = config.total_short_oi.saturating_sub(closing_size);
         }
     }
 
@@ -207,10 +226,18 @@ pub fn process(
 
     save_config(global_config_ai, &config)?;
 
-    position.is_open = false;
-    position.collateral_amount = 0;
-    position.borrow_amount_usdc = 0;
-    position.perp_size = 0;
+    if close_bps >= BPS_DENOMINATOR {
+        // Full liquidation — zero out position
+        position.is_open = false;
+        position.collateral_amount = 0;
+        position.borrow_amount_usdc = 0;
+        position.perp_size = 0;
+    } else {
+        // Partial deleverage — reduce position proportionally, keep open
+        position.collateral_amount = position.collateral_amount.saturating_sub(closing_collateral);
+        position.perp_size = position.perp_size.saturating_sub(closing_size);
+        position.borrow_amount_usdc = position.perp_size; // notional = size
+    }
     save_position(position_ai, &position)?;
 
     Ok(())

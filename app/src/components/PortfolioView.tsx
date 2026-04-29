@@ -1,4 +1,5 @@
 import { PositionView, HealthView } from "../hooks/usePosition";
+import { usePortfolioHealth, PortfolioHealth } from "../hooks/usePortfolioHealth";
 
 export function PortfolioView({
   accent,
@@ -11,39 +12,38 @@ export function PortfolioView({
   position?: PositionView | null;
   health?: HealthView | null;
 }) {
+  const portfolio = usePortfolioHealth();
   const price = solPrice || 0;
   const hasPosition = position?.isOpen ?? false;
 
   const collSol = hasPosition ? Number(position!.collateralAmount) / 1e9 : 0;
   const borrowUsdc = hasPosition ? Number(position!.borrowAmountUsdc) / 1e6 : 0;
-  const perpSizeSol = hasPosition ? Number(position!.perpSize) / 1e9 : 0;
   const entry = hasPosition ? Number(position!.entryPrice) / 1e6 : 0;
   const side = position?.perpSide === 0 ? "Long" : "Short";
 
-  const totalValue = collSol * price;
+  const totalValue = portfolio?.totalCollateralUsd ?? collSol * price;
   const pnl = hasPosition
-    ? (price - entry) * perpSizeSol * (side === "Long" ? 1 : -1)
+    ? (price - entry) * (Number(position!.perpSize) / 1e6 / price) * (side === "Long" ? 1 : -1)
     : 0;
   const pnlPct = totalValue > 0 ? (pnl / totalValue) * 100 : 0;
 
-  const healthBps = health ? Number(health.healthFactorBps) : 10000;
-  const healthFactor = healthBps / 10000;
-  const healthCol = healthFactor > 1.3 ? "#3fb68b" : healthFactor > 1.0 ? "#d29922" : "#ff5353";
-
-  const marginUsed = borrowUsdc > 0 && totalValue > 0
-    ? Math.round((borrowUsdc / (totalValue + borrowUsdc)) * 100)
-    : 0;
-
-  const liqDistance = hasPosition && entry > 0
-    ? Math.abs(((price - entry) / entry) * 100 * (side === "Long" ? 1 : -1))
-    : 0;
+  const posCount = portfolio?.positions?.length ?? (hasPosition ? 1 : 0);
 
   const STATS = [
-    { label: "Total Value", val: hasPosition ? `$${totalValue.toFixed(2)}` : "$0.00", sub: null, col: undefined },
+    { label: "Total Value", val: `$${totalValue.toFixed(2)}`, sub: null, col: undefined },
     { label: "Unrealized PnL", val: `${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)}`, sub: `${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%`, col: pnl >= 0 ? "#3fb68b" : "#ff5353" },
-    { label: "Collateral", val: hasPosition ? `${collSol.toFixed(4)} SOL` : "—", sub: hasPosition ? `$${totalValue.toFixed(2)}` : null, col: undefined },
-    { label: "Open Positions", val: hasPosition ? "1" : "0", sub: null, col: undefined },
+    { label: "Open Positions", val: String(posCount), sub: null, col: undefined },
+    {
+      label: "Margin Savings",
+      val: portfolio ? `$${portfolio.savingsUsd.toFixed(2)}` : "$0.00",
+      sub: portfolio && portfolio.savingsPct > 0 ? `${portfolio.savingsPct.toFixed(1)}% from hedging` : null,
+      col: portfolio && portfolio.savingsPct > 0 ? "#3fb68b" : undefined,
+    },
   ];
+
+  const phBps = portfolio?.portfolioHealthBps ?? 10000;
+  const phPct = Math.min(100, (phBps / 200)); // scale for bar
+  const phCol = phBps > 1500 ? "#3fb68b" : phBps > 800 ? "#d29922" : "#ff5353";
 
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: 24, background: "#0d1117" }}>
@@ -59,7 +59,80 @@ export function PortfolioView({
         ))}
       </div>
 
+      {/* Portfolio Health Bar */}
+      {portfolio && posCount > 0 && (
+        <div style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "#e6edf3" }}>Portfolio Health</span>
+            <span style={{ fontSize: 20, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: phCol }}>
+              {(phBps / 100).toFixed(1)}%
+            </span>
+          </div>
+          <div style={{ width: "100%", height: 8, background: "#21262d", borderRadius: 4, overflow: "hidden" }}>
+            <div style={{ width: `${phPct}%`, height: "100%", background: phCol, borderRadius: 4, transition: "all 0.3s" }} />
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 14 }}>
+            <div>
+              <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase" }}>Portfolio Margin</div>
+              <div style={{ fontSize: 14, fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3", marginTop: 2 }}>
+                ${portfolio.portfolioMarginUsd.toFixed(2)}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase" }}>Individual Sum</div>
+              <div style={{ fontSize: 14, fontFamily: "IBM Plex Mono,monospace", color: "#8b949e", marginTop: 2 }}>
+                ${portfolio.individualMarginUsd.toFixed(2)}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase" }}>Worst Scenario</div>
+              <div style={{ fontSize: 11, fontFamily: "IBM Plex Mono,monospace", color: "#d29922", marginTop: 4 }}>
+                {portfolio.worstScenario}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        {/* Correlation Matrix */}
+        {portfolio && portfolio.correlationMatrix.markets.length > 1 && (
+          <div style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 12, padding: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#e6edf3", marginBottom: 14 }}>Correlation Matrix</div>
+            <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={{ padding: 4 }} />
+                  {portfolio.correlationMatrix.markets.map(m => (
+                    <th key={m} style={{ padding: 4, color: "#8b949e", fontWeight: 600 }}>{m}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {portfolio.correlationMatrix.markets.map((m, i) => (
+                  <tr key={m}>
+                    <td style={{ padding: 4, color: "#8b949e", fontWeight: 600 }}>{m}</td>
+                    {portfolio.correlationMatrix.values[i].map((v, j) => {
+                      const intensity = Math.round(v * 255);
+                      return (
+                        <td key={j} style={{
+                          padding: 4, textAlign: "center",
+                          fontFamily: "IBM Plex Mono,monospace",
+                          color: v >= 0.8 ? "#3fb68b" : v >= 0.6 ? "#d29922" : "#8b949e",
+                        }}>
+                          {v.toFixed(2)}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Collateral Breakdown */}
         <div style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 12, padding: 16 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: "#e6edf3", marginBottom: 14 }}>Collateral Breakdown</div>
           {([
@@ -73,24 +146,6 @@ export function PortfolioView({
                 <div style={{ width: `${frac * 100}%`, height: "100%", background: accent, borderRadius: 3 }} />
               </div>
               <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3", width: 32, textAlign: "right" }}>{pct}</span>
-            </div>
-          ))}
-        </div>
-
-        <div style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 12, padding: 16 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "#e6edf3", marginBottom: 14 }}>Risk Metrics</div>
-          {([
-            ["Health Factor", hasPosition ? healthFactor.toFixed(2) : "—", healthCol],
-            ["Margin Used", hasPosition ? `${marginUsed}%` : "—", marginUsed > 75 ? "#d29922" : "#3fb68b"],
-            ["Liq. Distance", hasPosition ? `${liqDistance.toFixed(1)}%` : "—", liqDistance > 15 ? "#3fb68b" : "#d29922"],
-            ["Correlated Exp.", "0%/30% cap", "#8b949e"],
-          ] as [string, string, string][]).map(([lbl, val, col]) => (
-            <div key={lbl} style={{
-              display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13,
-              borderBottom: "1px solid #21262d",
-            }}>
-              <span style={{ color: "#8b949e" }}>{lbl}</span>
-              <span style={{ fontFamily: "IBM Plex Mono,monospace", color: col, fontWeight: 600 }}>{val}</span>
             </div>
           ))}
         </div>
