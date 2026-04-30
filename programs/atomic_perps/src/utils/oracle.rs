@@ -134,7 +134,6 @@ pub fn validate_switchboard_divergence(
     pyth_price_6dp: u64,
 ) -> Result<(), ProgramError> {
     use crate::constants::{SWITCHBOARD_SOL_USD_FEED, ORACLE_DIVERGENCE_BPS, BPS_DENOMINATOR};
-    use crate::ensure;
 
     // Verify the account is the expected Switchboard aggregator (address + owner)
     ensure!(*switchboard_ai.key == SWITCHBOARD_SOL_USD_FEED, AtomicPerpsError::BadInput);

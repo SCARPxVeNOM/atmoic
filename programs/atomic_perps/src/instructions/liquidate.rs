@@ -28,7 +28,7 @@ use crate::constants::*;
 use crate::ensure;
 use crate::utils::oracle::{validate_and_get_price, validate_jlp_price};
 use crate::utils::math::{
-    apply_haircut, calculate_pnl, checked_mul_div,
+    apply_haircut, checked_mul_div,
     get_decimals_for_mint, get_haircut_for_mint, token_to_usd,
 };
 use crate::utils::token::{spl_transfer_signed, read_token_owner};
@@ -200,6 +200,7 @@ pub fn process(
         liquidator.key,
         margin_ratio,
         closing_collateral,
+        close_bps,
     );
 
     // Decrement collateral tracking for closed portion

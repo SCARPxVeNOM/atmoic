@@ -143,7 +143,10 @@ pub const MIN_SPREAD_BPS: u16 = 5;
 // === Funding Rate Settlement (R-2) ===
 
 pub const FUNDING_INTERVAL_SECONDS: i64 = 28_800; // 8 hours
-pub const MAX_FUNDING_RATE_BPS: i64 = 100;         // ±1% max per 8h period
+// Tightened from ±1% to ±0.5% — limits authority's per-interval discretion.
+// Phase 0: rate set by authority off-chain (Pyth TWAP computed in backend).
+// Phase 1: on-chain TWAP replaces authority-supplied rate entirely.
+pub const MAX_FUNDING_RATE_BPS: i64 = 50;          // ±0.5% max per 8h period
 
 // === PSF (Protocol Stability Fund, R-3) ===
 

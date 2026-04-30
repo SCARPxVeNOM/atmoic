@@ -43,13 +43,15 @@ pub fn emit_position_closed(
 
 pub fn emit_position_liquidated(
     owner: &Pubkey, liquidator: &Pubkey, health_factor: u64, collateral_seized: u64,
+    close_pct_bps: u64,
 ) {
-    let mut buf = [0u8; 88];
+    let mut buf = [0u8; 96];
     buf[0..8].copy_from_slice(b"POSLIQD_");
     buf[8..40].copy_from_slice(owner.as_ref());
     buf[40..72].copy_from_slice(liquidator.as_ref());
     buf[72..80].copy_from_slice(&health_factor.to_le_bytes());
     buf[80..88].copy_from_slice(&collateral_seized.to_le_bytes());
+    buf[88..96].copy_from_slice(&close_pct_bps.to_le_bytes());
     sol_log_data(&[&buf]);
 }
 
@@ -105,6 +107,18 @@ pub fn emit_funding_settled(
     buf[40..48].copy_from_slice(&funding_rate_bps.to_le_bytes());
     buf[48..56].copy_from_slice(&adjustment.to_le_bytes());
     buf[56..64].copy_from_slice(&new_collateral.to_le_bytes());
+    sol_log_data(&[&buf]);
+}
+
+pub fn emit_config_updated(
+    authority: &Pubkey, protocol_fee_bps: u64, max_leverage: u64, max_tvl: u64,
+) {
+    let mut buf = [0u8; 64];
+    buf[0..8].copy_from_slice(b"CFGUPD__");
+    buf[8..40].copy_from_slice(authority.as_ref());
+    buf[40..48].copy_from_slice(&protocol_fee_bps.to_le_bytes());
+    buf[48..56].copy_from_slice(&max_leverage.to_le_bytes());
+    buf[56..64].copy_from_slice(&max_tvl.to_le_bytes());
     sol_log_data(&[&buf]);
 }
 

@@ -11,7 +11,7 @@ use crate::constants::*;
 use crate::constants::is_allowed_feed;
 use crate::ensure;
 use crate::utils::oracle::{validate_and_get_price, validate_jlp_price, validate_msol_price};
-use crate::utils::math::{calculate_pnl, checked_mul_div, get_decimals_for_mint, token_to_usd, apply_haircut};
+use crate::utils::math::{checked_mul_div, get_decimals_for_mint, token_to_usd, apply_haircut};
 use crate::utils::token::{spl_transfer_signed, read_token_amount, read_token_owner};
 use crate::utils::account::{load_config, save_config, load_position, save_position};
 use crate::events::emit_position_closed;
@@ -153,13 +153,17 @@ pub fn process(
     let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
 
     // -------- 6. Fee transfer: vault -> fee_recipient (90%) + PSF accrual (10%) --------
-    let psf_portion_coll = fee_in_collateral / 10;
-    let recipient_fee_coll = fee_in_collateral.saturating_sub(psf_portion_coll);
+    // Cap fee at vault balance to prevent overdraw under concurrent closes
+    let vault_balance_before = read_token_amount(collateral_vault)?;
+    let capped_fee = fee_in_collateral.min(vault_balance_before);
+    let psf_portion_coll = capped_fee / 10;
+    let recipient_fee_coll = capped_fee.saturating_sub(psf_portion_coll);
     if recipient_fee_coll > 0 {
         spl_transfer_signed(token_program, collateral_vault, fee_recipient_account, program_authority, recipient_fee_coll, signer_seeds)?;
     }
-    // PSF accrual in USD equivalent (accounting only)
-    config.psf_balance = config.psf_balance.saturating_add(fee_usd / 10);
+    // PSF accrual in USD equivalent (accounting only, based on capped fee)
+    let capped_fee_usd = checked_mul_div(capped_fee, collateral_price.max(1), pow)?;
+    config.psf_balance = config.psf_balance.saturating_add(capped_fee_usd / 10);
 
     // -------- 7. Return collateral to user --------
     if collateral_to_return > 0 {

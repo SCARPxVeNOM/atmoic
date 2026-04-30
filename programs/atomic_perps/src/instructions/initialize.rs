@@ -69,6 +69,12 @@ pub fn process(
     let (auth_pda, auth_bump) = Pubkey::find_program_address(&[AUTHORITY_SEED], program_id);
     ensure!(*program_authority.key == auth_pda, AtomicPerpsError::BadInput);
 
+    // Validate parameter ranges
+    ensure!(params.max_leverage >= 1_000 && params.max_leverage <= 50_000, AtomicPerpsError::BadInput);
+    ensure!(params.protocol_fee_bps <= 500, AtomicPerpsError::BadInput);
+    ensure!(params.liquidation_threshold >= 100 && params.liquidation_threshold <= 10_000, AtomicPerpsError::BadInput);
+    ensure!(params.max_tvl > 0, AtomicPerpsError::BadInput);
+
     let auth_key = *program_authority.key;
 
     ensure!(

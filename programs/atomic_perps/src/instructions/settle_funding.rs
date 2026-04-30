@@ -80,8 +80,9 @@ pub fn process(
         AtomicPerpsError::FundingRateExceedsMax
     );
 
-    // Verify oracle is fresh (validates staleness, confidence)
+    // Verify oracle matches position's market and is fresh
     ensure!(is_allowed_feed(pyth_price_feed.key), AtomicPerpsError::InvalidOracleFeed);
+    ensure!(*pyth_price_feed.key == position.perp_market, AtomicPerpsError::InvalidOracleFeed);
     let (current_price, _conf) = validate_and_get_price(pyth_price_feed, &clock)?;
 
     // Calculate funding adjustment in USD: (perp_size * funding_rate_bps) / BPS_DENOMINATOR
@@ -126,7 +127,7 @@ pub fn process(
 
     // Update global state
     config.last_funding_at = clock.unix_timestamp;
-    config.accumulated_funding = config.accumulated_funding.wrapping_add(funding_rate_bps);
+    config.accumulated_funding = config.accumulated_funding.saturating_add(funding_rate_bps);
 
     save_config(global_config_ai, &config)?;
     save_position(position_ai, &position)?;
