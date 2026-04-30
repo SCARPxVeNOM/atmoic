@@ -63,7 +63,8 @@ export const App: FC = () => {
   const oracle = useOracle();
   const oraclePrices = useOraclePrices(["sol", "btc", "eth"]);
   const { positions } = usePositions();
-  const funding = useFundingRate();
+  const fundingKey = activeMarket === "BTC-USD" ? "btc" : activeMarket === "ETH-USD" ? "eth" : "sol";
+  const funding = useFundingRate(fundingKey);
   const tickers = useTickers();
   const { publicKey, disconnect } = useWallet();
   const { setVisible } = useWalletModal();

@@ -74,14 +74,14 @@ export function TradePanel({
   const perpMarket = MARKET_TO_PERP[activeMarket || "SOL-USD"] || "SOL-PERP";
   const priceKey = MARKET_TO_KEY[activeMarket || "SOL-USD"] || "sol";
   const markPrice = prices?.[priceKey] || solPrice || 0;
-  const price = solPrice || 0; // SOL price for collateral value
+  const solPriceVal = solPrice || 0; // SOL price (for SOL collateral valuation)
   const sol = parseFloat(amount) || 0;
   const cut = COLLATERAL.find(c => c.id === col)?.cut || 0;
 
   // Fetch collateral price for non-SOL collateral types
   const [collPrice, setCollPrice] = useState<number>(0);
   useEffect(() => {
-    if (col === "SOL") { setCollPrice(price); return; }
+    if (col === "SOL") { setCollPrice(solPriceVal); return; }
     const mint = col === "JLP"
       ? "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4"
       : "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So";
@@ -89,10 +89,10 @@ export function TradePanel({
       .then(r => r.json())
       .then(d => { if (d[mint]?.usdPrice) setCollPrice(Number(d[mint].usdPrice)); })
       .catch(() => {});
-  }, [col, price]);
+  }, [col, solPriceVal]);
 
   // effectivePrice: USD value per 1 unit of the selected collateral token
-  const effectivePrice = col === "SOL" ? price : collPrice;
+  const effectivePrice = col === "SOL" ? solPriceVal : collPrice;
 
   // Fetch vault risk for Pro mode
   useEffect(() => {
@@ -111,34 +111,45 @@ export function TradePanel({
     const notional = collUsd * leverage;
     const fee = notional * 0.001; // 10bps on notional
     const netCollUsd = collUsd - fee; // after fee deduction
-    const entryPrice = price * (side === "Long" ? 1.0003 : 0.9997);
+    // Entry price is the PERP MARKET price (not collateral price)
+    const entryPrice = markPrice * (side === "Long" ? 1.0003 : 0.9997);
 
     // Margin ratio = effective_collateral / notional
     const marginRatio = notional > 0 ? effColl / notional : 9.99;
 
-    // Liquidation price: when margin ratio hits MAINTENANCE_MARGIN_PCT (5%)
-    // For SOL collateral on SOL-perp (correlated):
-    //   effectiveMargin(P) = collateral_in_sol * P + PnL(P)
-    //   For long: PnL = (P - entry) / entry * notional
-    //   Solve for P where effectiveMargin / notional = 0.05
-    const collSol = sol;
+    // Liquidation price estimate
+    // For SOL collateral on SOL-perp: collateral value moves with perp price (correlated)
+    // For JLP/mSOL or cross-market: collateral value is ~fixed, only PnL changes
+    const isCorrCollateral = col === "SOL" && perpMarket === "SOL-PERP";
     const liqPrice = (() => {
       if (notional <= 0 || entryPrice <= 0) return 0;
-      // effectiveMargin = collSol * P * (1 - cut/100) + (P - entry)/entry * notional (for long)
-      // Set = maintenanceMargin * notional and solve for P
       const target = MAINTENANCE_MARGIN_PCT * notional;
       const cutFactor = (1 - cut / 100);
-      if (side === "Long") {
-        // collSol * P * cutFactor + (P - entry) * notional / entry = target
-        // P * (collSol * cutFactor + notional / entry) = target + notional
-        const denom = collSol * cutFactor + notional / entryPrice;
-        return denom > 0 ? (target + notional) / denom : 0;
+
+      if (isCorrCollateral) {
+        // SOL collateral on SOL-perp: collateral value moves with price
+        const collSol = sol;
+        if (side === "Long") {
+          const denom = collSol * cutFactor + notional / entryPrice;
+          return denom > 0 ? (target + notional) / denom : 0;
+        } else {
+          const denom = collSol * cutFactor - notional / entryPrice;
+          if (denom >= 0) return 0;
+          return (target - notional) / denom;
+        }
       } else {
-        // collSol * P * cutFactor + (entry - P) * notional / entry = target
-        // P * (collSol * cutFactor - notional / entry) = target - notional
-        const denom = collSol * cutFactor - notional / entryPrice;
-        if (denom >= 0) return 0; // can't liquidate (very low leverage short)
-        return (target - notional) / denom;
+        // Non-correlated: collateral USD is ~fixed, only PnL changes
+        // margin = (collUsd * cutFactor + PnL) / notional = 0.05
+        // Long PnL = (P - entry) / entry * notional
+        // collUsd*cutFactor + (P-entry)/entry * notional = target
+        // P * notional/entry = target - collUsd*cutFactor + notional
+        if (side === "Long") {
+          const num = (target - effColl + notional) * entryPrice;
+          return num > 0 ? num / notional : 0;
+        } else {
+          const num = (effColl - target + notional) * entryPrice;
+          return num > 0 ? num / notional : 0;
+        }
       }
     })();
 
@@ -147,7 +158,7 @@ export function TradePanel({
     const healthCol = marginPct > 15 ? "#3fb68b" : marginPct > 8 ? "#d29922" : "#ff5353";
 
     return { notional, entryPrice, liqPrice, fee, marginRatio, healthCol };
-  }, [sol, effectivePrice, price, leverage, side, cut]);
+  }, [sol, effectivePrice, markPrice, leverage, side, cut, col, perpMarket]);
 
   const sideColor = side === "Long" ? "#3fb68b" : "#ff5353";
   const btnDisabled = sol <= 0 || !publicKey || busy;
@@ -193,7 +204,8 @@ export function TradePanel({
   const requestOpen = () => {
     const collLabel = col === "SOL" ? `${sol} SOL` : `${sol} ${col}`;
     const notionalUsd = summary.notional.toFixed(2);
-    const desc = `Open ${leverage}x ${side} \u2014 Deposit ${collLabel} ($${(sol * effectivePrice).toFixed(2)}) as margin, ${side.toLowerCase()} $${notionalUsd} notional${col !== "SOL" ? ` (auto-converts SOL \u2192 ${col})` : ""}`;
+    const marketLabel = activeMarket || "SOL-USD";
+    const desc = `Open ${leverage}x ${side} ${marketLabel} \u2014 Deposit ${collLabel} ($${(sol * effectivePrice).toFixed(2)}) as margin, ${side.toLowerCase()} $${notionalUsd} notional${col !== "SOL" ? ` (auto-converts SOL \u2192 ${col})` : ""}`;
     setConfirmDesc(desc);
   };
 
@@ -294,7 +306,27 @@ export function TradePanel({
               }}
             />
             <span style={{ fontSize: 13, color: "#8b949e", flexShrink: 0 }}>{col}</span>
-            <button style={{
+            <button onClick={async () => {
+              if (!publicKey || !connection) return;
+              try {
+                if (col === "SOL") {
+                  const bal = await connection.getBalance(publicKey);
+                  // Leave 0.01 SOL for fees
+                  const max = Math.max(0, (bal / 1e9) - 0.01);
+                  setAmount(max.toFixed(4));
+                } else {
+                  const { PublicKey: PK } = await import("@solana/web3.js");
+                  const { TOKEN_PROGRAM_ID } = await import("@solana/spl-token");
+                  const mint = col === "JLP"
+                    ? new PK("27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4")
+                    : new PK("mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So");
+                  const accounts = await connection.getParsedTokenAccountsByOwner(publicKey, { mint });
+                  const info = accounts.value[0]?.account?.data?.parsed?.info;
+                  const bal = info ? Number(info.tokenAmount.uiAmount) : 0;
+                  setAmount(bal.toFixed(col === "JLP" ? 2 : 4));
+                }
+              } catch { /* ignore */ }
+            }} style={{
               fontSize: 10, color: accent, background: `${accent}18`,
               border: `1px solid ${accent}40`, borderRadius: 4, padding: "2px 7px",
               cursor: "pointer", flexShrink: 0,
