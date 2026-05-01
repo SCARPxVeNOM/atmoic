@@ -658,6 +658,18 @@ function initSolanaScene(canvas: HTMLCanvasElement, section: HTMLElement) {
         const aspect = longest / Math.max(shortest, 1e-6);
         return aspect > 18 && longest < 1.6;
       };
+      const looksLikeSphericalDot = (mesh: THREE.Mesh) => {
+        if (!mesh.geometry) return false;
+        if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+        const bb = mesh.geometry.boundingBox;
+        if (!bb) return false;
+        bb.getSize(tmpSize);
+        const longest = Math.max(tmpSize.x, tmpSize.y, tmpSize.z);
+        const shortest = Math.min(tmpSize.x, tmpSize.y, tmpSize.z);
+        const aspect = longest / Math.max(shortest, 1e-6);
+        const vertexCount = (mesh.geometry.getAttribute("position") as THREE.BufferAttribute | undefined)?.count ?? 0;
+        return longest < 0.18 && aspect < 1.5 && vertexCount > 30;
+      };
       model.traverse((object) => {
         if (!isMesh(object)) return;
         object.castShadow = false;
@@ -666,6 +678,12 @@ function initSolanaScene(canvas: HTMLCanvasElement, section: HTMLElement) {
         const parentName = `${object.parent?.name ?? ""}`.toLowerCase();
         debugMeshNames.push(`${object.name}|parent=${object.parent?.name ?? ""}`);
         const mats = Array.isArray(object.material) ? object.material : [object.material];
+
+        if (looksLikeSphericalDot(object)) {
+          object.visible = false;
+          return;
+        }
+
         const looksLikeText =
           textPattern.test(meshName) ||
           textPattern.test(parentName) ||
