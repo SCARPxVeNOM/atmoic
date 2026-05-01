@@ -136,17 +136,19 @@ pub fn process(
         .checked_pow(coll_decimals as u32)
         .ok_or(AtomicPerpsError::MathOverflow)?;
 
+    ensure!(collateral_price > 0, AtomicPerpsError::BadInput);
+
     // -------- 3. PnL on closing portion (power-aware) --------
     let power = position.power_milli;
     let pnl = crate::utils::math::calculate_pnl_power(entry_price, exit_price, closing_size, &perp_side, power)?;
 
     let pnl_in_collateral_abs: u64 = if pnl == 0 { 0 } else {
-        checked_mul_div(pnl.unsigned_abs(), pow, collateral_price.max(1))?
+        checked_mul_div(pnl.unsigned_abs(), pow, collateral_price)?
     };
 
     // -------- 4. Close fee (on closing notional) --------
     let fee_usd = checked_mul_div(closing_size, config.protocol_fee_bps, BPS_DENOMINATOR)?;
-    let fee_in_collateral = checked_mul_div(fee_usd, pow, collateral_price.max(1))?;
+    let fee_in_collateral = checked_mul_div(fee_usd, pow, collateral_price)?;
 
     // -------- 5. Settlement: closing_collateral - fee +/- PnL --------
     let mut collateral_to_return = closing_collateral.saturating_sub(fee_in_collateral);
@@ -173,7 +175,7 @@ pub fn process(
         spl_transfer_signed(token_program, collateral_vault, fee_recipient_account, program_authority, recipient_fee_coll, signer_seeds)?;
     }
     // PSF accrual in USD equivalent (accounting only, based on capped fee)
-    let capped_fee_usd = checked_mul_div(capped_fee, collateral_price.max(1), pow)?;
+    let capped_fee_usd = checked_mul_div(capped_fee, collateral_price, pow)?;
     config.psf_balance = config.psf_balance.saturating_add(capped_fee_usd / 10);
 
     // -------- 7. Return collateral to user --------

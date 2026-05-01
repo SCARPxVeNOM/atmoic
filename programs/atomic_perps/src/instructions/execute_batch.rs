@@ -111,10 +111,13 @@ pub fn process(
     let config = load_config(global_config_ai)?;
     ensure!(!config.is_paused, AtomicPerpsError::ProtocolPaused);
 
+    ensure!(is_allowed_feed(pyth_price_feed.key), AtomicPerpsError::InvalidOracleFeed);
     let (pyth_price, _) = validate_and_get_price(pyth_price_feed, &Clock::get()?)?;
 
     // Price cap: clearing price must be within ±0.3% of Pyth
-    let max_deviation = (pyth_price * PYTH_CAP_BPS) / BPS_DENOMINATOR;
+    let max_deviation = pyth_price.checked_mul(PYTH_CAP_BPS)
+        .ok_or(AtomicPerpsError::MathOverflow)?
+        / BPS_DENOMINATOR;
     let price_upper = pyth_price.saturating_add(max_deviation);
     let price_lower = pyth_price.saturating_sub(max_deviation);
 
@@ -293,7 +296,8 @@ pub fn process(
 
     // PSF accrual: 10% of implied protocol fee on matched volume (F-02 R-3)
     // Fee = volume × protocol_fee_bps / 10_000; PSF = 10% of that
-    let implied_fee = total_matchable.saturating_mul(config.protocol_fee_bps) / BPS_DENOMINATOR;
+    let implied_fee = total_matchable.checked_mul(config.protocol_fee_bps)
+        .ok_or(AtomicPerpsError::MathOverflow)? / BPS_DENOMINATOR;
     config.psf_balance = config.psf_balance.saturating_add(implied_fee / 10);
 
     save_config(global_config_ai, &config)?;

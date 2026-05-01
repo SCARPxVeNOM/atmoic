@@ -122,7 +122,7 @@ fn normalize_to_6dp(value: u64, exponent: i32) -> Result<u64, ProgramError> {
         value.checked_mul(f).ok_or(AtomicPerpsError::MathOverflow.into())
     } else {
         let f = 10u64.checked_pow((-shift) as u32).ok_or(AtomicPerpsError::MathOverflow)?;
-        Ok(value / f)
+        value.checked_div(f).ok_or(AtomicPerpsError::MathOverflow.into())
     }
 }
 
@@ -153,8 +153,12 @@ pub fn validate_switchboard_divergence(
         return Err(AtomicPerpsError::BadInput.into());
     }
 
-    // Convert to 6dp
-    let sw_price_6dp = (price_f64 * 1_000_000.0) as u64;
+    // Convert to 6dp (guard against extreme values that would overflow u64)
+    let sw_price_raw = price_f64 * 1_000_000.0;
+    if sw_price_raw > u64::MAX as f64 || sw_price_raw < 1.0 {
+        return Err(AtomicPerpsError::BadInput.into());
+    }
+    let sw_price_6dp = sw_price_raw as u64;
 
     // Check divergence: |pyth - switchboard| / pyth > threshold
     let diff = if pyth_price_6dp > sw_price_6dp {
@@ -163,7 +167,13 @@ pub fn validate_switchboard_divergence(
         sw_price_6dp - pyth_price_6dp
     };
 
-    let divergence_bps = (diff as u128 * BPS_DENOMINATOR as u128) / (pyth_price_6dp as u128);
+    if pyth_price_6dp == 0 {
+        return Err(AtomicPerpsError::BadInput.into());
+    }
+    let divergence_bps = (diff as u128)
+        .checked_mul(BPS_DENOMINATOR as u128)
+        .ok_or(AtomicPerpsError::MathOverflow)?
+        / (pyth_price_6dp as u128);
     ensure!(
         divergence_bps <= ORACLE_DIVERGENCE_BPS as u128,
         AtomicPerpsError::OracleDivergence

@@ -100,9 +100,9 @@ pub fn calculate_pnl_power(
         };
 
         let pnl_signed: i128 = if is_profit {
-            pnl_abs as i128
+            i128::try_from(pnl_abs).map_err(|_| AtomicPerpsError::MathOverflow)?
         } else {
-            -(pnl_abs as i128)
+            -(i128::try_from(pnl_abs).map_err(|_| AtomicPerpsError::MathOverflow)?)
         };
 
         return i64::try_from(pnl_signed)

@@ -35,7 +35,8 @@ pub fn process(
     ensure!(*commitment_ai.key == commitment_pda, AtomicPerpsError::BadInput);
     ensure!(queue_shard_ai.owner == program_id, AtomicPerpsError::BadInput);
 
-    // Load commitment
+    // Load commitment (verify ownership before deserialization)
+    ensure!(commitment_ai.owner == program_id, AtomicPerpsError::BadInput);
     let cdata = commitment_ai.try_borrow_data()?;
     ensure!(cdata.len() >= 8 + OrderCommitment::INIT_SPACE, AtomicPerpsError::CommitmentNotFound);
     ensure!(cdata[..8] == COMMITMENT_DISCRIMINATOR, AtomicPerpsError::CommitmentNotFound);

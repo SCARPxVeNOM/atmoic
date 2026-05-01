@@ -71,6 +71,13 @@ pub fn process(
 
     let mut position = load_position(position_ai)?;
 
+    // Verify position PDA before using any position data
+    let (expected_pos_pda, _) = Pubkey::find_program_address(
+        &[POSITION_SEED, position.owner.as_ref(), pyth_price_feed.key.as_ref()],
+        program_id,
+    );
+    ensure!(*position_ai.key == expected_pos_pda, AtomicPerpsError::BadInput);
+
     ensure!(position.is_open, AtomicPerpsError::PositionNotOpen);
     ensure!(crate::constants::is_allowed_feed(pyth_price_feed.key), AtomicPerpsError::InvalidOracleFeed);
     ensure!(*pyth_price_feed.key == position.perp_market, AtomicPerpsError::InvalidOracleFeed);
@@ -86,13 +93,6 @@ pub fn process(
         config.sol_vault
     };
     ensure!(*collateral_vault.key == expected_vault, AtomicPerpsError::BadInput);
-
-    // Verify position PDA
-    let (expected_pos_pda, _) = Pubkey::find_program_address(
-        &[POSITION_SEED, position.owner.as_ref(), pyth_price_feed.key.as_ref()],
-        program_id,
-    );
-    ensure!(*position_ai.key == expected_pos_pda, AtomicPerpsError::BadInput);
 
     let coll_decimals = get_decimals_for_mint(&coll_mint);
     let haircut_bps = get_haircut_for_mint(&coll_mint);
@@ -130,6 +130,8 @@ pub fn process(
         ensure!(age >= JLP_LIQUIDATION_GRACE_SECONDS, AtomicPerpsError::LiquidationGracePeriod);
     }
 
+    ensure!(collateral_price > 0, AtomicPerpsError::BadInput);
+
     // -------- 2. Margin-based health check --------
     // For JLP: use max(entry_price, current_price) per A-04 — yield can only help
     let health_price = if coll_mint == config.jlp_mint {
@@ -148,10 +150,10 @@ pub fn process(
 
     // Effective collateral = collateral +/- PnL (in collateral token units)
     let effective_coll = if pnl >= 0 {
-        let pnl_coll = checked_mul_div(pnl as u64, pow, collateral_price.max(1))?;
+        let pnl_coll = checked_mul_div(pnl as u64, pow, collateral_price)?;
         collateral_amount.saturating_add(pnl_coll)
     } else {
-        let loss_coll = checked_mul_div((-pnl) as u64, pow, collateral_price.max(1))?;
+        let loss_coll = checked_mul_div((-pnl) as u64, pow, collateral_price)?;
         collateral_amount.saturating_sub(loss_coll)
     };
 
@@ -257,10 +259,10 @@ pub fn process(
                 position.entry_price, current_price, position.perp_size, &position.perp_side, power,
             )?;
             let remaining_eff_coll = if remaining_pnl >= 0 {
-                let pnl_coll = checked_mul_div(remaining_pnl as u64, pow, collateral_price.max(1))?;
+                let pnl_coll = checked_mul_div(remaining_pnl as u64, pow, collateral_price)?;
                 position.collateral_amount.saturating_add(pnl_coll)
             } else {
-                let loss_coll = checked_mul_div((-remaining_pnl) as u64, pow, collateral_price.max(1))?;
+                let loss_coll = checked_mul_div((-remaining_pnl) as u64, pow, collateral_price)?;
                 position.collateral_amount.saturating_sub(loss_coll)
             };
             let remaining_margin_usd = apply_haircut(

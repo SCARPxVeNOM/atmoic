@@ -193,7 +193,8 @@ pub fn process(
     let total_fee_bps = config.protocol_fee_bps.saturating_add(effective_spread as u64);
     let fee_usd = checked_mul_div(notional_usd, total_fee_bps, BPS_DENOMINATOR)?;
     let pow = 10u64.checked_pow(coll_decimals as u32).ok_or(AtomicPerpsError::MathOverflow)?;
-    let fee_in_collateral = checked_mul_div(fee_usd, pow, collateral_price_6dp.max(1))?;
+    ensure!(collateral_price_6dp > 0, AtomicPerpsError::BadInput);
+    let fee_in_collateral = checked_mul_div(fee_usd, pow, collateral_price_6dp)?;
 
     // Net collateral after fee
     let net_collateral = params.collateral_amount
