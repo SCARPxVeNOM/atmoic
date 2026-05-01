@@ -2,10 +2,6 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
-import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
-import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import "./IntroPage.css";
 
 const assetPath = (name: string) => `${import.meta.env.BASE_URL}assets/${name}`;
@@ -127,33 +123,33 @@ function initHeroScene(canvas: HTMLCanvasElement, loading: HTMLElement) {
       titleInner.position.sub(finalCenter);
 
       const titleMat = new THREE.MeshPhysicalMaterial({
-        color: 0xf7f7f7,
+        color: 0xd8a84a,
         metalness: 1,
         roughness: 0.045,
         clearcoat: 1,
         clearcoatRoughness: 0.015,
         envMapIntensity: 3.8,
-        emissive: 0xdcdcdc,
-        emissiveIntensity: 0.08,
+        emissive: 0x6f4300,
+        emissiveIntensity: 0.18,
         reflectivity: 1,
-        iridescence: 0.06,
+        iridescence: 0.04,
         iridescenceIOR: 1.55,
         iridescenceThicknessRange: [120, 220],
         anisotropy: 0.72,
         anisotropyRotation: Math.PI / 2,
         sheen: 0.18,
         sheenRoughness: 0.36,
-        sheenColor: 0xffffff,
+        sheenColor: 0xffdfa0,
       });
       const subMat = new THREE.MeshPhysicalMaterial({
-        color: 0xd8d8d8,
+        color: 0xc7963a,
         metalness: 0.88,
         roughness: 0.16,
         clearcoat: 0.95,
         clearcoatRoughness: 0.06,
         envMapIntensity: 2.45,
-        emissive: 0xbdbdbd,
-        emissiveIntensity: 0.1,
+        emissive: 0x4f2e00,
+        emissiveIntensity: 0.16,
         reflectivity: 0.9,
         iridescence: 0.04,
         iridescenceIOR: 1.35,
@@ -229,8 +225,8 @@ function initHeroScene(canvas: HTMLCanvasElement, loading: HTMLElement) {
         material.transparent = introOpacity < 1;
         material.opacity = introOpacity;
         if (material instanceof THREE.MeshPhysicalMaterial) {
-          material.emissiveIntensity = 0.08 + Math.sin(elapsedSeconds * 0.7) * 0.018;
-          material.envMapIntensity = 3.1 + Math.sin(elapsedSeconds * 0.4) * 0.18;
+          material.emissiveIntensity = 0.16 + Math.sin(elapsedSeconds * 0.7) * 0.026;
+          material.envMapIntensity = 3.3 + Math.sin(elapsedSeconds * 0.4) * 0.2;
         }
       });
     });
@@ -524,335 +520,10 @@ function initPhoneScene(
   };
 }
 
-function initSolanaScene(canvas: HTMLCanvasElement, section: HTMLElement) {
-  const renderer = new THREE.WebGLRenderer({
-    canvas,
-    alpha: true,
-    antialias: true,
-    powerPreference: "high-performance",
-  });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setClearColor(0x000000, 0);
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.35;
-
-  const scene = new THREE.Scene();
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  const environment = pmrem.fromScene(new RoomEnvironment(), 0.03).texture;
-  scene.environment = environment;
-
-  const camera = new THREE.PerspectiveCamera(26, 1, 0.1, 100);
-  camera.position.set(0, 0, 8.6);
-  camera.lookAt(0, 0, 0);
-
-  scene.add(new THREE.AmbientLight(0xffd9a8, 0.55));
-  const key = new THREE.DirectionalLight(0xfff1d8, 2.4);
-  key.position.set(2.6, 3.4, 4.8);
-  scene.add(key);
-  const rim = new THREE.DirectionalLight(0xffae3a, 1.85);
-  rim.position.set(-3.4, 1.4, 2.4);
-  scene.add(rim);
-  const fill = new THREE.DirectionalLight(0xffc071, 0.85);
-  fill.position.set(0, -2, 3);
-  scene.add(fill);
-  const edge = new THREE.DirectionalLight(0xff8a1c, 1.1);
-  edge.position.set(2.6, -1.8, -2.4);
-  scene.add(edge);
-  const uplight = new THREE.PointLight(0xffae3a, 1.6, 8, 1.4);
-  uplight.position.set(0, -1.4, 1.6);
-  scene.add(uplight);
-
-  const modelOuter = new THREE.Group();
-  const modelInner = new THREE.Group();
-  modelInner.position.y = 1.55;
-  modelOuter.add(modelInner);
-  scene.add(modelOuter);
-
-  const cosmicCount = 700;
-  const cosmicPositions = new Float32Array(cosmicCount * 3);
-  const cosmicColors = new Float32Array(cosmicCount * 3);
-  const cosmicSpeeds = new Float32Array(cosmicCount);
-  const cosmicSeeds = new Float32Array(cosmicCount);
-  const cosmicTopY = 4.4;
-  const cosmicBottomY = -0.6;
-  for (let i = 0; i < cosmicCount; i++) {
-    const r = 0.3 + Math.random() * 3.4;
-    const theta = Math.random() * Math.PI * 2;
-    cosmicPositions[i * 3 + 0] = Math.cos(theta) * r;
-    cosmicPositions[i * 3 + 1] = cosmicBottomY + Math.random() * (cosmicTopY - cosmicBottomY);
-    cosmicPositions[i * 3 + 2] = Math.sin(theta) * r;
-    cosmicSpeeds[i] = 0.18 + Math.random() * 0.45;
-    cosmicSeeds[i] = Math.random() * Math.PI * 2;
-    cosmicColors[i * 3 + 0] = 1.0;
-    cosmicColors[i * 3 + 1] = 0.92;
-    cosmicColors[i * 3 + 2] = 0.4;
-  }
-  const cosmicGeom = new THREE.BufferGeometry();
-  cosmicGeom.setAttribute("position", new THREE.BufferAttribute(cosmicPositions, 3));
-  cosmicGeom.setAttribute("color", new THREE.BufferAttribute(cosmicColors, 3));
-  const cosmicMat = new THREE.PointsMaterial({
-    vertexColors: true,
-    size: 0.075,
-    sizeAttenuation: true,
-    transparent: true,
-    opacity: 1,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    toneMapped: false,
-  });
-  const cosmic = new THREE.Points(cosmicGeom, cosmicMat);
-  cosmic.renderOrder = 3;
-  scene.add(cosmic);
-
-  const cosmicHaloMat = new THREE.PointsMaterial({
-    color: 0xffd24a,
-    size: 0.22,
-    sizeAttenuation: true,
-    transparent: true,
-    opacity: 0.45,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    toneMapped: false,
-  });
-  const cosmicHalo = new THREE.Points(cosmicGeom, cosmicHaloMat);
-  cosmicHalo.renderOrder = 2;
-  scene.add(cosmicHalo);
-
-  let raf = 0;
-  let disposed = false;
-  let lastFrame = performance.now() / 1000;
-
-  const loader = new GLTFLoader();
-  loader.load(
-    assetPath("solana-model.glb"),
-    (gltf) => {
-      if (disposed) {
-        disposeObject(gltf.scene);
-        return;
-      }
-      const model = gltf.scene;
-      const box = new THREE.Box3().setFromObject(model);
-      const center = box.getCenter(new THREE.Vector3());
-      const size = box.getSize(new THREE.Vector3());
-      model.position.sub(center);
-      model.scale.setScalar(3.35 / Math.max(0.001, Math.max(size.x, size.y, size.z)));
-      modelInner.add(model);
-
-      const goldColor = new THREE.Color(0xf7d000);
-      const goldEmissive = new THREE.Color(0x2a2000);
-      const textBlack = new THREE.Color(0x000000);
-      const textPattern = /(^|[^a-z])(text|label|caption|glyph)([^a-z]|$)/i;
-      const cubeMeshes: THREE.Mesh[] = [];
-      const debugMeshNames: string[] = [];
-      const tmpSize = new THREE.Vector3();
-      const looksLikeLabelGeometry = (mesh: THREE.Mesh) => {
-        if (!mesh.geometry) return false;
-        if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
-        const bb = mesh.geometry.boundingBox;
-        if (!bb) return false;
-        bb.getSize(tmpSize);
-        const longest = Math.max(tmpSize.x, tmpSize.y, tmpSize.z);
-        const shortest = Math.min(tmpSize.x, tmpSize.y, tmpSize.z);
-        if (longest < 0.6) return true;
-        const aspect = longest / Math.max(shortest, 1e-6);
-        return aspect > 18 && longest < 1.6;
-      };
-      const looksLikeSphericalDot = (mesh: THREE.Mesh) => {
-        if (!mesh.geometry) return false;
-        if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
-        const bb = mesh.geometry.boundingBox;
-        if (!bb) return false;
-        bb.getSize(tmpSize);
-        const longest = Math.max(tmpSize.x, tmpSize.y, tmpSize.z);
-        const shortest = Math.min(tmpSize.x, tmpSize.y, tmpSize.z);
-        const aspect = longest / Math.max(shortest, 1e-6);
-        const vertexCount = (mesh.geometry.getAttribute("position") as THREE.BufferAttribute | undefined)?.count ?? 0;
-        return longest < 0.18 && aspect < 1.5 && vertexCount > 30;
-      };
-      model.traverse((object) => {
-        if (!isMesh(object)) return;
-        object.castShadow = false;
-        object.receiveShadow = false;
-        const meshName = `${object.name ?? ""}`.toLowerCase();
-        const parentName = `${object.parent?.name ?? ""}`.toLowerCase();
-        debugMeshNames.push(`${object.name}|parent=${object.parent?.name ?? ""}`);
-        const mats = Array.isArray(object.material) ? object.material : [object.material];
-
-        if (looksLikeSphericalDot(object)) {
-          object.visible = false;
-          return;
-        }
-
-        const looksLikeText =
-          textPattern.test(meshName) ||
-          textPattern.test(parentName) ||
-          looksLikeLabelGeometry(object);
-
-        if (looksLikeText) {
-          mats.forEach((mat) => {
-            if (!mat) return;
-            const m = mat as THREE.MeshStandardMaterial;
-            if (m.color) m.color.copy(textBlack);
-            if (m.emissive) {
-              m.emissive.set(0x000000);
-              m.emissiveIntensity = 0;
-            }
-            m.metalness = 0;
-            m.roughness = 0.6;
-            m.transparent = false;
-            m.depthTest = false;
-            m.depthWrite = false;
-            m.polygonOffset = true;
-            m.polygonOffsetFactor = -8;
-            m.polygonOffsetUnits = -8;
-            m.toneMapped = false;
-            m.needsUpdate = true;
-          });
-          object.renderOrder = 999;
-          object.frustumCulled = false;
-          return;
-        }
-
-        const hasTextureMap = mats.some((m) => {
-          const sm = m as THREE.MeshStandardMaterial | null;
-          return !!(sm && (sm.map || sm.emissiveMap));
-        });
-
-        if (hasTextureMap) {
-          object.frustumCulled = false;
-          return;
-        }
-
-        const replacement = new THREE.MeshStandardMaterial({
-          color: goldColor,
-          emissive: goldEmissive,
-          emissiveIntensity: 0.22,
-          metalness: 0.95,
-          roughness: 0.22,
-          envMapIntensity: 1.6,
-          transparent: false,
-          opacity: 1,
-          alphaTest: 0,
-          depthTest: true,
-          depthWrite: true,
-          side: THREE.FrontSide,
-        });
-        mats.forEach((mat) => mat?.dispose?.());
-        if (Array.isArray(object.material)) {
-          object.material = object.material.map(() => replacement);
-        } else {
-          object.material = replacement;
-        }
-        cubeMeshes.push(object);
-      });
-
-      const blackEdgeMat = new THREE.LineBasicMaterial({
-        color: 0x000000,
-        transparent: false,
-        opacity: 1,
-        toneMapped: false,
-      });
-      cubeMeshes.forEach((mesh) => {
-        if (!mesh.geometry) return;
-        const edges = new THREE.EdgesGeometry(mesh.geometry, 24);
-        const line = new THREE.LineSegments(edges, blackEdgeMat);
-        line.renderOrder = 5;
-        mesh.add(line);
-      });
-      console.log("[solana-model meshes]", debugMeshNames);
-    },
-    undefined,
-    (err) => console.warn("solana-model.glb load error:", err),
-  );
-
-  const resize = () => {
-    const width = canvas.clientWidth;
-    const height = canvas.clientHeight;
-    if (!width || !height) return;
-    renderer.setSize(width, height, false);
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
-  };
-  resize();
-  window.addEventListener("resize", resize);
-
-  const mouse = { x: 0, y: 0, tx: 0, ty: 0 };
-  const responsive = { scale: 1, y: 0 };
-  const updateResponsive = () => {
-    const width = canvas.clientWidth;
-    if (width < 440) {
-      responsive.scale = 0.72;
-      responsive.y = -0.24;
-    } else if (width < 760) {
-      responsive.scale = 0.86;
-      responsive.y = -0.12;
-    } else {
-      responsive.scale = 1;
-      responsive.y = 0;
-    }
-  };
-  updateResponsive();
-  const onMouseMove = (event: MouseEvent) => {
-    mouse.tx = (event.clientX / window.innerWidth - 0.5) * 1.6;
-    mouse.ty = (event.clientY / window.innerHeight - 0.5) * 0.7;
-  };
-  window.addEventListener("mousemove", onMouseMove);
-  window.addEventListener("resize", updateResponsive);
-
-  const startedAt = performance.now();
-  const loop = () => {
-    const nowSeconds = performance.now() / 1000;
-    const dt = Math.min(0.05, Math.max(0.001, nowSeconds - lastFrame));
-    lastFrame = nowSeconds;
-    const elapsedSeconds = (performance.now() - startedAt) / 1000;
-    mouse.x += (mouse.tx - mouse.x) * 0.18;
-    mouse.y += (mouse.ty - mouse.y) * 0.18;
-    modelOuter.scale.setScalar(responsive.scale);
-    modelOuter.rotation.y = mouse.x + Math.sin(elapsedSeconds * 0.32) * 0.04;
-    modelOuter.rotation.x = -mouse.y + Math.sin(elapsedSeconds * 0.26) * 0.018;
-    modelOuter.position.y = responsive.y + Math.sin(elapsedSeconds * 0.45) * 0.04;
-    const cosmicArr = (cosmicGeom.getAttribute("position") as THREE.BufferAttribute).array as Float32Array;
-    const cosmicColorArr = (cosmicGeom.getAttribute("color") as THREE.BufferAttribute).array as Float32Array;
-    for (let i = 0; i < cosmicCount; i++) {
-      let y = cosmicArr[i * 3 + 1] + cosmicSpeeds[i] * dt;
-      if (y > cosmicTopY) y = cosmicBottomY;
-      cosmicArr[i * 3 + 1] = y;
-      cosmicArr[i * 3 + 0] += Math.sin(elapsedSeconds * 0.9 + cosmicSeeds[i]) * 0.0008;
-      cosmicArr[i * 3 + 2] += Math.cos(elapsedSeconds * 0.7 + cosmicSeeds[i]) * 0.0008;
-      const tw = 0.4 + (Math.sin(elapsedSeconds * 4.2 + cosmicSeeds[i] * 1.7) * 0.5 + 0.5) * 0.6;
-      cosmicColorArr[i * 3 + 0] = 1.0 * tw;
-      cosmicColorArr[i * 3 + 1] = 0.92 * tw;
-      cosmicColorArr[i * 3 + 2] = 0.4 * tw;
-    }
-    (cosmicGeom.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
-    (cosmicGeom.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
-    cosmicHaloMat.opacity = 0.4 + Math.sin(elapsedSeconds * 2.1) * 0.15;
-    renderer.render(scene, camera);
-    raf = requestAnimationFrame(loop);
-  };
-  loop();
-
-  void section;
-
-  return () => {
-    disposed = true;
-    cancelAnimationFrame(raf);
-    window.removeEventListener("resize", resize);
-    window.removeEventListener("resize", updateResponsive);
-    window.removeEventListener("mousemove", onMouseMove);
-    disposeObject(scene);
-    environment.dispose();
-    pmrem.dispose();
-    renderer.dispose();
-  };
-}
-
 export function IntroPage({ onEnter }: { onEnter: () => void }) {
   const pageRef = useRef<HTMLElement>(null);
   const heroCanvasRef = useRef<HTMLCanvasElement>(null);
   const heroLoadingRef = useRef<HTMLDivElement>(null);
-  const solanaCanvasRef = useRef<HTMLCanvasElement>(null);
   const solanaSectionRef = useRef<HTMLElement>(null);
   const phoneCanvasRef = useRef<HTMLCanvasElement>(null);
   const phoneSectionRef = useRef<HTMLElement>(null);
@@ -865,13 +536,6 @@ export function IntroPage({ onEnter }: { onEnter: () => void }) {
     const loading = heroLoadingRef.current;
     if (!canvas || !loading) return undefined;
     return initHeroScene(canvas, loading);
-  }, []);
-
-  useEffect(() => {
-    const canvas = solanaCanvasRef.current;
-    const section = solanaSectionRef.current;
-    if (!canvas || !section) return undefined;
-    return initSolanaScene(canvas, section);
   }, []);
 
   useEffect(() => {
@@ -914,6 +578,10 @@ export function IntroPage({ onEnter }: { onEnter: () => void }) {
     phoneSectionRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
+  const scrollToProtocol = () => {
+    solanaSectionRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
   return (
     <main ref={pageRef} className="intro-page">
       <nav className="intro-nav">
@@ -921,6 +589,11 @@ export function IntroPage({ onEnter }: { onEnter: () => void }) {
           <span className="intro-brand-mark" aria-hidden="true" />
           <span className="intro-brand-text">IDLExchange</span>
         </button>
+        <div className="intro-nav-pill" aria-label="Landing page navigation">
+          <button onClick={scrollToProtocol}>Protocol</button>
+          <button onClick={scrollToPhone}>Interface</button>
+          <button onClick={onEnter}>Trade</button>
+        </div>
       </nav>
 
       <section className="intro-hero" aria-label="IDLExchange landing">
@@ -930,6 +603,9 @@ export function IntroPage({ onEnter }: { onEnter: () => void }) {
           Initializing scene · 3D
         </div>
 
+        <div className="intro-gold-ornament intro-gold-ornament-left" aria-hidden="true" />
+        <div className="intro-gold-ornament intro-gold-ornament-right" aria-hidden="true" />
+        <div className="intro-hero-kicker">Formal Perpetuals · Mainnet Execution</div>
         <div className="intro-frame-corner intro-frame-corner-tl" aria-hidden="true">
           <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
             <path d="M0 0 L0 12 M0 0 L12 0" stroke="rgba(255,255,255,0.35)" strokeWidth="1" />
@@ -942,19 +618,38 @@ export function IntroPage({ onEnter }: { onEnter: () => void }) {
         </div>
 
         <div className="intro-hero-content">
+          <div className="intro-hero-eyebrow">Verified derivatives desk</div>
           <p className="intro-hero-sub">
-            Eighteen machine-checked Lean 4 theorems guard every state transition. Discrete frequent batch
-            auctions neutralize MEV. One transaction in, one out.
+            A cinematic trading surface for Solana perps, guarded by machine-checked proofs and executed through
+            batch auctions that keep every fill deliberate.
           </p>
           <div className="intro-hero-actions">
             <button className="intro-btn intro-btn-primary" onClick={onEnter}>
-              Open the exchange
+              Open exchange
             </button>
             <button className="intro-btn" onClick={scrollToPhone}>
-              View mobile app
+              View app
             </button>
           </div>
         </div>
+
+        <aside className="intro-hero-proof" aria-label="Protocol proof highlights">
+          <div className="intro-proof-card intro-proof-card-large">
+            <span>Risk Engine</span>
+            <strong>18 / 18</strong>
+            <small>Lean proofs · zero sorry</small>
+          </div>
+          <div className="intro-proof-card">
+            <span>Settlement</span>
+            <strong>DFBA</strong>
+            <small>MEV-resistant batches</small>
+          </div>
+          <div className="intro-proof-card">
+            <span>Collateral</span>
+            <strong>SOL</strong>
+            <small>Pure vault model</small>
+          </div>
+        </aside>
 
         <div className="intro-hero-meta" aria-label="Protocol metrics">
           <div className="intro-hero-meta-col">
@@ -980,12 +675,13 @@ export function IntroPage({ onEnter }: { onEnter: () => void }) {
       <section ref={solanaSectionRef} className="intro-solana-section" aria-label="Protocol architecture">
         <div className="intro-solana-sticky">
           <div className="intro-solana-copy">
-            <div className="intro-solana-eyebrow">Protocol · Architecture</div>
+            <div className="intro-solana-eyebrow">Gold Standard · Architecture</div>
             <h2 className="intro-solana-title">
               Four primitives.<br /><b>One verified</b> stack.
             </h2>
             <p className="intro-solana-desc">
-              Every module formally verified, MEV-resistant, and live on mainnet — built on Solana.
+              Every module is shaped around proof-carrying execution, gold-lit market state, and transaction flows
+              that make risk visible before capital moves.
             </p>
             <ul className="intro-solana-pillars">
               <li><span>01</span>Yield Back</li>
@@ -995,7 +691,6 @@ export function IntroPage({ onEnter }: { onEnter: () => void }) {
             </ul>
           </div>
           <div className="intro-solana-stage">
-            <canvas ref={solanaCanvasRef} className="intro-solana-canvas" />
             <div className="intro-solana-glow" aria-hidden="true" />
           </div>
         </div>
@@ -1004,15 +699,15 @@ export function IntroPage({ onEnter }: { onEnter: () => void }) {
       <section ref={phoneSectionRef} className="intro-phone-section" aria-label="IDLExchange mobile app">
         <div className="intro-phone-sticky">
           <div className="intro-phone-copy">
-            <div className="intro-phone-eyebrow">Mobile · Native</div>
+            <div className="intro-phone-eyebrow">Pocket Desk · Native</div>
             <h2 className="intro-phone-title">
               The whole <b>desk</b>
               <br />
               in your pocket.
             </h2>
             <p className="intro-phone-desc">
-              From discovery to position management, every primitive of the protocol is rebuilt for one thumb.
-              Place orders, watch funding, and hold collateral on a verified vault.
+              From discovery to position management, every primitive is rebuilt for one thumb: inspect funding,
+              preview collateral health, and place batched orders from a verified vault.
             </p>
 
             <div ref={phoneFeaturesRef} className="intro-phone-features">

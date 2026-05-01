@@ -27,7 +27,7 @@ const HEADER_MARKETS_FALLBACK = [
 ];
 
 const TWEAK_DEFAULTS: Tweaks = {
-  accentColor: "#a78bfa",
+  accentColor: "#d6a84a",
   showPositions: true,
   chartInterval: "15m",
   maxLeverage: 15,
@@ -40,14 +40,14 @@ function PriceTag({ market, active, onClick }: {
     <button onClick={onClick} style={{
       display: "flex", alignItems: "center", gap: 6,
       padding: "4px 10px", borderRadius: 6, border: "1px solid",
-      borderColor: active ? "#30363d" : "transparent",
-      background: active ? "#161b22" : "transparent",
+      borderColor: active ? "rgba(255,216,116,0.42)" : "transparent",
+      background: active ? "rgba(214,168,74,0.12)" : "transparent",
       cursor: "pointer",
     }}>
-      <span style={{ fontSize: 12, fontWeight: 600, color: "#e6edf3" }}>{market.label}</span>
+      <span style={{ fontSize: 12, fontWeight: 600, color: active ? "#ffd874" : "#fff6df" }}>{market.label}</span>
       <span style={{
-        fontSize: 11, fontFamily: "IBM Plex Mono,monospace", fontWeight: 600,
-        color: market.change >= 0 ? "#3fb68b" : "#ff5353",
+        fontSize: 11, fontFamily: "Geist Mono,monospace", fontWeight: 600,
+        color: market.change >= 0 ? "#3fcf91" : "#ff6b6b",
       }}>{market.change >= 0 ? "+" : ""}{market.change.toFixed(1)}%</span>
     </button>
   );
@@ -88,23 +88,37 @@ export const App: FC = () => {
   }
 
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#0d1117" }}>
+    <div style={{
+      height: "100vh", display: "flex", flexDirection: "column",
+      background: "radial-gradient(circle at 22% 0%, rgba(214,168,74,0.13), transparent 32%), linear-gradient(180deg, #0d130b 0%, #070906 56%, #030403 100%)",
+      color: "#fff6df",
+      fontFamily: "Geist, Inter, system-ui, sans-serif",
+    }}>
       {/* Header */}
       <header style={{
-        height: 52, flexShrink: 0,
-        borderBottom: "1px solid #30363d",
+        height: 58, flexShrink: 0,
+        borderBottom: "1px solid rgba(214,168,74,0.18)",
         display: "flex", alignItems: "center",
-        padding: "0 16px", gap: 0,
+        padding: "0 18px", gap: 0,
+        background: "linear-gradient(180deg, rgba(15,21,13,0.94), rgba(7,9,6,0.84))",
+        boxShadow: "0 18px 60px rgba(0,0,0,0.26)",
+        backdropFilter: "blur(18px)",
       }}>
         {/* Logo */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginRight: 20, cursor: "pointer" }}
           onClick={() => setPage("intro")}>
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-            <rect width="24" height="24" rx="6" fill={accent} />
-            <path d="M12 4L20 18H4L12 4Z" fill="#0d1117" opacity="0.9" />
-            <circle cx="12" cy="15" r="2" fill="#0d1117" opacity="0.6" />
+            <rect width="24" height="24" rx="6" fill="url(#idlHeaderGold)" />
+            <path d="M12 4L20 18H4L12 4Z" fill="#070906" opacity="0.92" />
+            <circle cx="12" cy="15" r="2" fill="#070906" opacity="0.62" />
+            <defs>
+              <linearGradient id="idlHeaderGold" x1="3" y1="2" x2="22" y2="23" gradientUnits="userSpaceOnUse">
+                <stop stopColor="#ffe49a" />
+                <stop offset="1" stopColor="#b87a22" />
+              </linearGradient>
+            </defs>
           </svg>
-          <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.03em", color: "#e6edf3" }}>
+          <span style={{ fontSize: 15, fontWeight: 700, color: "#fff6df" }}>
             IDL<span style={{ color: accent }}>Exchange</span>
           </span>
         </div>
@@ -114,16 +128,16 @@ export const App: FC = () => {
           {NAV_ITEMS.map(n => (
             <button key={n} onClick={() => setPage(n)} style={{
               padding: "5px 14px", fontSize: 13, fontWeight: 500,
-              borderRadius: 6, border: "none", cursor: "pointer",
-              background: page === n ? "#21262d" : "transparent",
-              color: page === n ? "#e6edf3" : "#8b949e",
+              borderRadius: 999, border: "none", cursor: "pointer",
+              background: page === n ? "rgba(214,168,74,0.13)" : "transparent",
+              color: page === n ? "#ffd874" : "rgba(255,232,177,0.58)",
               transition: "color 0.15s, background 0.15s",
             }}>{n}</button>
           ))}
         </nav>
 
         {/* Market tabs */}
-        <div style={{ display: "flex", gap: 4, borderLeft: "1px solid #30363d", paddingLeft: 16 }}>
+        <div style={{ display: "flex", gap: 4, borderLeft: "1px solid rgba(214,168,74,0.18)", paddingLeft: 16 }}>
           {headerMarkets.map(m => (
             <PriceTag key={m.id}
               market={m}
@@ -136,13 +150,13 @@ export const App: FC = () => {
         {/* Right side */}
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
           {/* Mode toggle */}
-          <div style={{ display: "flex", borderRadius: 6, border: "1px solid #30363d", overflow: "hidden" }}>
+          <div style={{ display: "flex", borderRadius: 999, border: "1px solid rgba(214,168,74,0.22)", overflow: "hidden", background: "rgba(255,216,116,0.035)" }}>
             {UI_MODES.map(m => (
               <button key={m} onClick={() => setUiMode(m)} style={{
                 padding: "4px 10px", fontSize: 11, fontWeight: 600,
                 border: "none", cursor: "pointer",
-                background: uiMode === m ? "#21262d" : "transparent",
-                color: uiMode === m ? "#e6edf3" : "#8b949e",
+                background: uiMode === m ? "rgba(214,168,74,0.16)" : "transparent",
+                color: uiMode === m ? "#ffd874" : "rgba(255,232,177,0.56)",
                 transition: "all 0.15s",
               }}>{m}</button>
             ))}
@@ -150,32 +164,32 @@ export const App: FC = () => {
 
           {/* Tweaks toggle */}
           <button onClick={() => setTweaksVisible(v => !v)} style={{
-            background: "none", border: "1px solid #30363d", borderRadius: 6,
-            padding: "4px 8px", cursor: "pointer", fontSize: 12, color: "#8b949e",
+            background: "rgba(255,216,116,0.035)", border: "1px solid rgba(214,168,74,0.22)", borderRadius: 999,
+            padding: "4px 9px", cursor: "pointer", fontSize: 12, color: "rgba(255,232,177,0.68)",
           }} title="Tweaks">{"\u2699"}</button>
 
           {/* Network badge */}
-          <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#8b949e" }}>
-            <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#3fb68b", boxShadow: "0 0 4px #3fb68b" }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "rgba(255,232,177,0.62)" }}>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#3fcf91", boxShadow: "0 0 9px #3fcf91" }} />
             Mainnet
           </div>
 
           {/* Connect wallet */}
           {publicKey ? (
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 11, fontFamily: "IBM Plex Mono,monospace", color: "#8b949e" }}>
+              <span style={{ fontSize: 11, fontFamily: "Geist Mono,monospace", color: "rgba(255,232,177,0.58)" }}>
                 {publicKey.toBase58().slice(0, 4)}...{publicKey.toBase58().slice(-4)}
               </span>
               <button onClick={() => disconnect()} style={{
-                padding: "6px 12px", background: "#21262d", border: "1px solid #30363d",
-                borderRadius: 8, color: "#e6edf3", fontSize: 12, cursor: "pointer",
+                padding: "6px 12px", background: "rgba(255,216,116,0.06)", border: "1px solid rgba(214,168,74,0.22)",
+                borderRadius: 999, color: "#fff6df", fontSize: 12, cursor: "pointer",
               }}>Disconnect</button>
             </div>
           ) : (
             <button onClick={() => setVisible(true)} style={{
-              padding: "6px 16px", background: accent, border: "none", borderRadius: 8,
-              color: "#0d1117", fontSize: 13, fontWeight: 700, cursor: "pointer",
-              letterSpacing: "-0.01em",
+              padding: "7px 17px", background: "linear-gradient(135deg, #ffe49a 0%, #c28a2d 100%)", border: "none", borderRadius: 999,
+              color: "#111006", fontSize: 13, fontWeight: 700, cursor: "pointer",
+              boxShadow: "0 10px 34px rgba(214,168,74,0.2)",
             }}>Connect Wallet</button>
           )}
         </div>
@@ -192,7 +206,7 @@ export const App: FC = () => {
 
       {page === "Trade" && uiMode !== "Simple" && (
         <>
-          <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+          <div style={{ flex: 1, display: "flex", minHeight: 0, padding: "12px 12px 0", gap: 12 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <ChartPanel
                 activeMarket={activeMarket}

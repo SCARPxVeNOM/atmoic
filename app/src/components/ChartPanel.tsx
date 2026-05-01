@@ -95,23 +95,23 @@ export function ChartPanel({
     if (!containerRef.current) return;
 
     const chart = createChart(containerRef.current, {
-      layout: { background: { color: "#0d1117" }, textColor: "#8b949e", fontSize: 11 },
-      grid: { vertLines: { color: "#161b22" }, horzLines: { color: "#161b22" } },
+      layout: { background: { color: "#09100a" }, textColor: "rgba(255,232,177,0.56)", fontSize: 11, fontFamily: "Geist Mono" },
+      grid: { vertLines: { color: "rgba(214,168,74,0.06)" }, horzLines: { color: "rgba(214,168,74,0.06)" } },
       crosshair: {
         mode: 1,
-        vertLine: { color: "#30363d" },
-        horzLine: { color: "#30363d" },
+        vertLine: { color: "rgba(255,216,116,0.24)" },
+        horzLine: { color: "rgba(255,216,116,0.24)" },
       },
-      rightPriceScale: { borderColor: "#30363d", autoScale: true },
-      timeScale: { borderColor: "#30363d", timeVisible: true, secondsVisible: false },
+      rightPriceScale: { borderColor: "rgba(214,168,74,0.16)", autoScale: true },
+      timeScale: { borderColor: "rgba(214,168,74,0.16)", timeVisible: true, secondsVisible: false },
       handleScroll: true,
       handleScale: true,
     });
 
     const series = chart.addCandlestickSeries({
-      upColor: "#3fb68b", downColor: "#ff5353",
-      borderUpColor: "#3fb68b", borderDownColor: "#ff5353",
-      wickUpColor: "#3fb68b", wickDownColor: "#ff5353",
+      upColor: "#3fcf91", downColor: "#ff6b6b",
+      borderUpColor: "#3fcf91", borderDownColor: "#ff6b6b",
+      wickUpColor: "#3fcf91", wickDownColor: "#ff6b6b",
     });
 
     chartRef.current = chart;
@@ -172,7 +172,7 @@ export function ChartPanel({
     }
     priceLineRef.current = seriesRef.current.createPriceLine({
       price: displayPrice,
-      color: "#58a6ff",
+      color: "#ffd874",
       lineWidth: 1,
       lineStyle: 2,
       axisLabelVisible: true,
@@ -185,19 +185,28 @@ export function ChartPanel({
     : n >= 1 ? n.toFixed(2) : n.toFixed(4);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#0d1117" }}>
+    <div style={{
+      display: "flex", flexDirection: "column", height: "100%",
+      background: "linear-gradient(180deg, rgba(15,21,13,0.94), rgba(8,13,8,0.98))",
+      border: "1px solid rgba(214,168,74,0.18)",
+      borderRadius: 8,
+      overflow: "hidden",
+      boxShadow: "inset 0 1px 0 rgba(255,246,223,0.04), 0 18px 60px rgba(0,0,0,0.22)",
+    }}>
       {/* Stats bar */}
       <div style={{
         display: "flex", alignItems: "center", gap: 16, padding: "0 16px",
-        height: 44, borderBottom: "1px solid #30363d", flexShrink: 0,
+        height: 48, borderBottom: "1px solid rgba(214,168,74,0.16)", flexShrink: 0,
+        background: "rgba(255,216,116,0.025)",
       }}>
         <div style={{ display: "flex", gap: 2 }}>
           {MARKETS.map(m => (
             <button key={m.id} onClick={() => onMarketChange(m.id)} style={{
               padding: "4px 12px", fontSize: 12, fontWeight: 500,
-              borderRadius: 6, border: "none", cursor: "pointer",
-              background: activeMarket === m.id ? "#21262d" : "transparent",
-              color: activeMarket === m.id ? "#e6edf3" : "#8b949e",
+              borderRadius: 999, border: "1px solid", cursor: "pointer",
+              borderColor: activeMarket === m.id ? "rgba(255,216,116,0.38)" : "transparent",
+              background: activeMarket === m.id ? "rgba(214,168,74,0.12)" : "transparent",
+              color: activeMarket === m.id ? "#ffd874" : "rgba(255,232,177,0.58)",
             }}>{m.label}</button>
           ))}
         </div>
@@ -205,26 +214,26 @@ export function ChartPanel({
         <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
           <span style={{
             fontSize: 20, fontWeight: 700,
-            fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3", letterSpacing: "-0.02em",
+            fontFamily: "Geist Mono,monospace", color: "#fff6df",
           }}>${fmt(displayPrice)}</span>
           <span style={{
-            fontSize: 12, fontFamily: "IBM Plex Mono,monospace", fontWeight: 600,
-            color: change24h >= 0 ? "#3fb68b" : "#ff5353",
+            fontSize: 12, fontFamily: "Geist Mono,monospace", fontWeight: 600,
+            color: change24h >= 0 ? "#3fcf91" : "#ff6b6b",
           }}>{change24h >= 0 ? "+" : ""}{change24h.toFixed(2)}%</span>
         </div>
 
-        <div style={{ display: "flex", gap: 18, fontSize: 11, color: "#8b949e" }}>
+        <div style={{ display: "flex", gap: 18, fontSize: 11, color: "rgba(255,232,177,0.56)" }}>
           {([
-            ["Mark", `$${fmt(markPrice)}`, "#58a6ff"],
-            ["Index", `$${fmt(indexPrice)}`, "#e6edf3"],
-            ["Funding", fundingRate8h != null ? `${fundingRate8h >= 0 ? "+" : ""}${fundingRate8h.toFixed(4)}%/8h` : "\u2014", fundingRate8h != null && fundingRate8h >= 0 ? "#3fb68b" : "#ff5353"],
-            ["24h Vol", volStr, "#e6edf3"],
-            ["24h High", high24h > 0 ? `$${fmt(high24h)}` : "\u2014", "#3fb68b"],
-            ["24h Low", low24h > 0 ? `$${fmt(low24h)}` : "\u2014", "#ff5353"],
+            ["Mark", `$${fmt(markPrice)}`, "#ffd874"],
+            ["Index", `$${fmt(indexPrice)}`, "#fff6df"],
+            ["Funding", fundingRate8h != null ? `${fundingRate8h >= 0 ? "+" : ""}${fundingRate8h.toFixed(4)}%/8h` : "\u2014", fundingRate8h != null && fundingRate8h >= 0 ? "#3fcf91" : "#ff6b6b"],
+            ["24h Vol", volStr, "#fff6df"],
+            ["24h High", high24h > 0 ? `$${fmt(high24h)}` : "\u2014", "#3fcf91"],
+            ["24h Low", low24h > 0 ? `$${fmt(low24h)}` : "\u2014", "#ff6b6b"],
           ] as [string, string, string][]).map(([lbl, val, col]) => (
             <span key={lbl}>
               {lbl}{" "}
-              <span style={{ fontFamily: "IBM Plex Mono,monospace", color: col, fontWeight: 500 }}>{val}</span>
+              <span style={{ fontFamily: "Geist Mono,monospace", color: col, fontWeight: 500 }}>{val}</span>
             </span>
           ))}
         </div>
@@ -233,9 +242,10 @@ export function ChartPanel({
           {INTERVALS.map(iv => (
             <button key={iv} onClick={() => setInterval_(iv)} style={{
               padding: "3px 8px", fontSize: 10, fontWeight: 600,
-              borderRadius: 4, border: "none", cursor: "pointer",
-              background: interval === iv ? "#21262d" : "transparent",
-              color: interval === iv ? "#e6edf3" : "#8b949e",
+              borderRadius: 999, border: "1px solid", cursor: "pointer",
+              borderColor: interval === iv ? "rgba(255,216,116,0.38)" : "transparent",
+              background: interval === iv ? "rgba(214,168,74,0.12)" : "transparent",
+              color: interval === iv ? "#ffd874" : "rgba(255,232,177,0.56)",
             }}>{iv}</button>
           ))}
         </div>
@@ -244,23 +254,23 @@ export function ChartPanel({
       {/* Countdown timer bar */}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "flex-end",
-        padding: "0 16px", height: 22, borderBottom: "1px solid #161b22",
-        fontSize: 10, fontFamily: "IBM Plex Mono,monospace", color: "#8b949e",
+        padding: "0 16px", height: 24, borderBottom: "1px solid rgba(214,168,74,0.1)",
+        fontSize: 10, fontFamily: "Geist Mono,monospace", color: "rgba(255,232,177,0.56)",
         gap: 12,
       }}>
         <span>
           Next candle{" "}
-          <span style={{ color: "#58a6ff", fontWeight: 600 }}>{countdown}</span>
+          <span style={{ color: "#ffd874", fontWeight: 600 }}>{countdown}</span>
         </span>
-        {error && <span style={{ color: "#ff5353" }}>Offline</span>}
-        {!error && candles && <span style={{ color: "#3fb68b" }}>{"\u25CF"} Live</span>}
+        {error && <span style={{ color: "#ff6b6b" }}>Offline</span>}
+        {!error && candles && <span style={{ color: "#3fcf91" }}>{"\u25CF"} Live</span>}
       </div>
 
       {/* Loading state */}
       {!candles && !error && (
         <div style={{
           flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: 12, color: "#8b949e",
+          fontSize: 12, color: "rgba(255,232,177,0.56)",
         }}>
           Loading {MARKETS.find(m => m.id === activeMarket)?.label} chart...
         </div>
