@@ -1,602 +1,1039 @@
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useRef } from "react";
+import * as THREE from "three";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import "./IntroPage.css";
 
-// ---- Canvas draw functions for warp objects ----
+const assetPath = (name: string) => `${import.meta.env.BASE_URL}assets/${name}`;
 
-function drawSOLCoin(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, a: number, _rot = 0) {
-  if (r < 2) return;
-  ctx.save(); ctx.globalAlpha = a;
-  const g = ctx.createRadialGradient(x - r * .28, y - r * .28, r * .05, x, y, r);
-  g.addColorStop(0, "#ede9fe"); g.addColorStop(0.4, "#a78bfa");
-  g.addColorStop(0.82, "#5b21b6"); g.addColorStop(1, "#1a0840");
-  ctx.shadowColor = "#a78bfa"; ctx.shadowBlur = r * 0.7;
-  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
-  ctx.fillStyle = g; ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.font = `900 ${r * 1.05}px Inter,sans-serif`;
-  ctx.fillStyle = "rgba(255,255,255,0.95)";
-  ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillText("\u25CE", x, y);
-  ctx.restore();
+function isMesh(object: THREE.Object3D): object is THREE.Mesh {
+  return (object as THREE.Mesh).isMesh === true;
 }
 
-function drawCandle(ctx: CanvasRenderingContext2D, x: number, y: number, sz: number, a: number, rot = 0) {
-  if (sz < 4) return;
-  ctx.save(); ctx.globalAlpha = a;
-  ctx.translate(x, y); ctx.rotate(rot);
-  const w = sz * 0.13;
-  const cols = ["#3fb68b", "#ff5353", "#3fb68b", "#ff5353", "#3fb68b"];
-  const hs = [0.42, 0.58, 0.32, 0.62, 0.46];
-  cols.forEach((c, i) => {
-    const bx = -sz * 0.38 + i * (sz * 0.19);
-    ctx.shadowColor = c; ctx.shadowBlur = 5;
-    ctx.fillStyle = c;
-    ctx.fillRect(bx - w / 2, -hs[i] * sz / 2, w, hs[i] * sz);
-    ctx.fillRect(bx - w * .12, -hs[i] * sz * .68, w * .24, hs[i] * sz * .38);
-  });
-  ctx.restore();
-}
-
-function drawLightning(ctx: CanvasRenderingContext2D, x: number, y: number, sz: number, a: number, rot = 0) {
-  if (sz < 4) return;
-  ctx.save(); ctx.globalAlpha = a;
-  ctx.translate(x, y); ctx.rotate(rot);
-  ctx.shadowColor = "#00FF57"; ctx.shadowBlur = sz * 0.5;
-  ctx.fillStyle = "#00FF57";
-  ctx.beginPath();
-  ctx.moveTo(sz * .18, -sz * .5);
-  ctx.lineTo(-sz * .08, -sz * .02);
-  ctx.lineTo(sz * .09, -sz * .02);
-  ctx.lineTo(-sz * .18, sz * .5);
-  ctx.lineTo(sz * .09, sz * .06);
-  ctx.lineTo(-sz * .04, sz * .06);
-  ctx.closePath(); ctx.fill();
-  ctx.restore();
-}
-
-function drawTriangle(ctx: CanvasRenderingContext2D, x: number, y: number, sz: number, a: number, rot = 0) {
-  if (sz < 4) return;
-  ctx.save(); ctx.globalAlpha = a;
-  ctx.translate(x, y); ctx.rotate(rot);
-  ctx.shadowColor = "#a78bfa"; ctx.shadowBlur = sz * 0.4;
-  ctx.fillStyle = "#a78bfa";
-  ctx.beginPath();
-  ctx.moveTo(0, sz * .54); ctx.lineTo(-sz * .52, -sz * .44); ctx.lineTo(sz * .52, -sz * .44);
-  ctx.closePath(); ctx.fill();
-  ctx.fillStyle = "#c4b5fd";
-  ctx.fillRect(-sz * .52, -sz * .5, sz * 1.04, sz * .12);
-  ctx.restore();
-}
-
-function drawPriceBox(ctx: CanvasRenderingContext2D, x: number, y: number, sz: number, a: number, rot = 0) {
-  if (sz < 10) return;
-  ctx.save(); ctx.globalAlpha = a;
-  ctx.translate(x, y); ctx.rotate(rot);
-  const bw = sz * 1.3, bh = sz * .6;
-  ctx.shadowColor = "#a78bfa"; ctx.shadowBlur = 14;
-  ctx.fillStyle = "#0d1117"; ctx.strokeStyle = "#a78bfa"; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.rect(-bw / 2, -bh / 2, bw, bh); ctx.fill(); ctx.stroke();
-  ctx.shadowBlur = 0;
-  ctx.font = `600 ${sz * .27}px 'IBM Plex Mono',monospace`;
-  ctx.fillStyle = "#3fb68b"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillText("$142.30", 0, -sz * .07);
-  ctx.font = `500 ${sz * .17}px 'IBM Plex Mono',monospace`;
-  ctx.fillStyle = "#8b949e"; ctx.fillText("SOL-USD  +2.4%", 0, sz * .16);
-  ctx.restore();
-}
-
-function drawChain(ctx: CanvasRenderingContext2D, x: number, y: number, sz: number, a: number, rot = 0) {
-  if (sz < 4) return;
-  ctx.save(); ctx.globalAlpha = a;
-  ctx.translate(x, y); ctx.rotate(rot);
-  ctx.strokeStyle = "#58a6ff"; ctx.lineWidth = sz * .1;
-  ctx.shadowColor = "#58a6ff"; ctx.shadowBlur = 16;
-  const rx = sz * .3, ry = sz * .15;
-  ctx.beginPath(); ctx.ellipse(-sz * .2, 0, rx, ry, 0, 0, Math.PI * 2); ctx.stroke();
-  ctx.beginPath(); ctx.ellipse(sz * .2, 0, rx, ry, 0, 0, Math.PI * 2); ctx.stroke();
-  ctx.restore();
-}
-
-type DrawFn = (ctx: CanvasRenderingContext2D, x: number, y: number, sz: number, a: number, rot: number) => void;
-const DRAW_FNS: DrawFn[] = [drawSOLCoin, drawCandle, drawLightning, drawTriangle, drawPriceBox, drawChain];
-const TYPE_COIN = 0;
-const FOCAL = 520;
-
-// ---- 3D warp particle ----
-
-class Warp {
-  type: number;
-  x = 0; y = 0; z = 0;
-  rot = 0; rotV = 0; sz = 0;
-
-  constructor(init: boolean) {
-    this.type = Math.floor(Math.random() * DRAW_FNS.length);
-    this.reset(init ? Math.random() * 2800 + 400 : 2800 + Math.random() * 400);
-  }
-
-  reset(z: number) {
-    const ang = Math.random() * Math.PI * 2;
-    const rad = 40 + Math.random() * 340;
-    this.x = Math.cos(ang) * rad;
-    this.y = Math.sin(ang) * rad;
-    this.z = z;
-    this.rot = Math.random() * Math.PI * 2;
-    this.rotV = (Math.random() - 0.5) * 0.07;
-    this.sz = 38 + Math.random() * 44;
-    this.type = Math.floor(Math.random() * DRAW_FNS.length);
-  }
-
-  update(sp: number) {
-    this.z -= sp; this.rot += this.rotV;
-    if (this.z < 5) this.reset(2900 + Math.random() * 400);
-  }
-
-  draw(ctx: CanvasRenderingContext2D, W: number, H: number) {
-    if (this.z <= 0) return;
-    const sc = FOCAL / this.z;
-    const sx = W / 2 + this.x * sc, sy = H / 2 + this.y * sc;
-    const ss = this.sz * sc;
-    const fade = Math.min(1, this.z / 500) * Math.min(1, (3200 - this.z) / 600);
-    if (fade <= 0 || ss < 1) return;
-    const fn = DRAW_FNS[this.type];
-    fn(ctx, sx, sy, this.type === TYPE_COIN ? ss / 2 : ss, fade, this.rot);
-  }
-}
-
-// ---- Helper draw functions ----
-
-function drawBg(ctx: CanvasRenderingContext2D, W: number, H: number, tsec: number) {
-  ctx.fillStyle = "#030309"; ctx.fillRect(0, 0, W, H);
-  ctx.save();
-  const lineAlpha = 0.03 + Math.sin(tsec * 1.5) * 0.015;
-  ctx.strokeStyle = `rgba(167,139,250,${lineAlpha})`;
-  ctx.lineWidth = 1;
-  const shift = (tsec * 55) % (W * .13);
-  for (let i = -4; i < 12; i++) {
-    const lx = i / 9 * W + shift;
-    ctx.beginPath(); ctx.moveTo(lx, 0); ctx.lineTo(lx + H, H); ctx.stroke();
-  }
-  [120, 200, 310].forEach((r, i) => {
-    const pulse = r + Math.sin(tsec * 2.5 + i) * 14;
-    ctx.strokeStyle = "rgba(167,139,250,0.04)";
-    ctx.beginPath(); ctx.arc(W / 2, H / 2, pulse, 0, Math.PI * 2); ctx.stroke();
-  });
-  ctx.restore();
-}
-
-const GEO_PANELS = [
-  { dir: 1, color: "#071a0a", t0: 0.00, t1: 0.45 },
-  { dir: -1, color: "#000", t0: 0.08, t1: 0.50 },
-  { dir: 1, color: "#a78bfa", t0: 0.18, t1: 0.55 },
-  { dir: -1, color: "#00FF57", t0: 0.28, t1: 1.00 },
-];
-function easeInOut(t: number) { return t < .5 ? 2 * t * t : -1 + (4 - 2 * t) * t; }
-
-function drawGeo(ctx: CanvasRenderingContext2D, W: number, H: number, p: number) {
-  GEO_PANELS.forEach(gp => {
-    const lp = Math.max(0, Math.min(1, (p - gp.t0) / (gp.t1 - gp.t0)));
-    const e = easeInOut(lp);
-    ctx.fillStyle = gp.color;
-    if (gp.dir === 1) ctx.fillRect(0, 0, e * W, H);
-    else ctx.fillRect(W - e * W, 0, e * W, H);
-  });
-}
-
-function easeOut3(t: number) { return 1 - Math.pow(1 - t, 3); }
-
-function drawLogoCanvas(ctx: CanvasRenderingContext2D, cx: number, cy: number, alpha: number, W: number, H: number) {
-  const sz = Math.min(W, H) * 0.21;
-  ctx.save(); ctx.globalAlpha = alpha;
-  ctx.translate(cx, cy);
-  const tw = sz * 1.3, th = sz * 0.135;
-  ctx.fillStyle = "#071a0a";
-  ctx.fillRect(-tw / 2, -sz * .62, tw, th);
-  ctx.font = `900 ${sz * .065}px Inter,sans-serif`;
-  ctx.fillStyle = "#00FF57"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillText("ATOMIC PERPS", 0, -sz * .555);
-  ctx.beginPath();
-  ctx.moveTo(0, sz * .68); ctx.lineTo(-sz * .65, -sz * .49); ctx.lineTo(sz * .65, -sz * .49);
-  ctx.closePath(); ctx.fillStyle = "#071a0a"; ctx.fill();
-  ctx.strokeStyle = "rgba(162,248,169,0.22)"; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.moveTo(0, -sz * .49); ctx.lineTo(0, sz * .68); ctx.stroke();
-  ctx.font = `900 ${sz * .57}px Inter,sans-serif`;
-  ctx.fillStyle = "#00FF57"; ctx.textBaseline = "middle";
-  ctx.fillText("IDL", 0, sz * .075);
-  ctx.restore();
-}
-
-function drawIris(ctx: CanvasRenderingContext2D, W: number, H: number, p: number) {
-  const maxR = Math.sqrt(W * W + H * H) * 0.72;
-  const r = easeOut3(p) * maxR;
-  ctx.fillStyle = "#00FF57"; ctx.fillRect(0, 0, W, H);
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(0, 0, W, H);
-  ctx.arc(W / 2, H / 2, r, 0, Math.PI * 2, true);
-  ctx.fillStyle = "#000"; ctx.fill();
-  ctx.restore();
-  if (p > 0.35) {
-    const la = Math.min(1, (p - 0.35) / 0.4);
-    drawLogoCanvas(ctx, W / 2, H / 2 - 55, la, W, H);
-  }
-}
-
-function overlayFlash(ctx: CanvasRenderingContext2D, W: number, H: number, color: string, alpha: number) {
-  ctx.fillStyle = color;
-  ctx.globalAlpha = alpha;
-  ctx.fillRect(0, 0, W, H);
-  ctx.globalAlpha = 1;
-}
-
-// ---- Animated Character SVG ----
-
-function CharacterSVG() {
-  return (
-    <div id="char-container" style={{ animation: "kickLean 6s ease-in-out 1.5s infinite" }}>
-      <svg width="180" height="330" viewBox="0 0 110 210" style={{ flexShrink: 0, overflow: "visible" }}>
-        {/* Ground shadow */}
-        <ellipse id="char-shadow" cx="55" cy="200" rx="34" ry="7" fill="#071a0a"
-          style={{ animation: "shadow 2.4s ease-in-out infinite", transformOrigin: "center" }} />
-
-        <g id="char-body" style={{ animation: "idle 2.4s ease-in-out infinite" }}>
-          {/* Shoes */}
-          <rect x="28" y="174" width="24" height="13" rx="7" fill="#071a0a" />
-          <g className="kick-r" style={{ transformOrigin: "70px 134px", animation: "kickLeg 6s ease-in-out 1.5s infinite" }}>
-            <rect x="62" y="134" width="15" height="44" rx="7" fill="#0d2212" />
-            <rect x="58" y="174" width="24" height="13" rx="7" fill="#071a0a" />
-          </g>
-
-          {/* Legs */}
-          <rect x="33" y="134" width="15" height="44" rx="7" fill="#0d2212" />
-
-          {/* Suit body */}
-          <rect x="24" y="80" width="62" height="60" rx="10" fill="#071a0a" />
-          {/* Shirt */}
-          <rect x="43" y="80" width="24" height="32" rx="5" fill="#183320" />
-          {/* Tie */}
-          <polygon points="55,86 59,104 55,110 51,104" fill="#a78bfa" />
-          {/* Lapels */}
-          <polygon points="43,80 36,108 44,108" fill="#0d2212" />
-          <polygon points="67,80 74,108 66,108" fill="#0d2212" />
-          {/* Suit button */}
-          <circle cx="55" cy="120" r="2.5" fill="#a78bfa" opacity="0.7" />
-
-          {/* Left arm (raised) */}
-          <g className="arm-l-g" style={{
-            transformOrigin: "20px 84px",
-            animation: "raiseArm 0.75s cubic-bezier(0.34,1.56,0.64,1) 0.5s both, gentleWave 2.2s ease-in-out 1.3s infinite",
-          }}>
-            <rect x="10" y="82" width="15" height="44" rx="7" fill="#071a0a" />
-            <circle cx="17" cy="128" r="7" fill="#1a4a22" />
-          </g>
-
-          {/* Right arm + phone */}
-          <g className="arm-r-g" style={{
-            animation: "armR 2.4s ease-in-out infinite",
-            transformOrigin: "90px 84px",
-          }}>
-            <rect x="85" y="82" width="15" height="44" rx="7" fill="#071a0a" />
-            <circle cx="93" cy="128" r="7" fill="#1a4a22" />
-            {/* Phone body */}
-            <rect x="87" y="116" width="13" height="20" rx="3" fill="#161b22" />
-            {/* Phone screen */}
-            <rect x="89" y="118" width="9" height="14" rx="1" fill="#0d1117" />
-            {/* Mini chart */}
-            <polyline points="90,129 91.5,125 93,127.5 95.5,122" fill="none" stroke="#3fb68b"
-              strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-          </g>
-
-          {/* Neck */}
-          <rect x="47" y="70" width="16" height="14" rx="7" fill="#1a4a22" />
-
-          {/* Head */}
-          <circle cx="55" cy="46" r="28" fill="#1a4a22" />
-
-          {/* Hair top */}
-          <path d="M29,40 Q30,8 55,7 Q80,8 81,40 Q73,20 55,18 Q37,20 29,40Z" fill="#071a0a" />
-          {/* Hair sides */}
-          <rect x="27" y="33" width="8" height="16" rx="4" fill="#071a0a" />
-          <rect x="75" y="33" width="8" height="16" rx="4" fill="#071a0a" />
-
-          {/* Eyebrows */}
-          <rect x="37" y="33" width="14" height="3.5" rx="1.5" fill="#071a0a" />
-          <rect x="59" y="33" width="14" height="3.5" rx="1.5" fill="#071a0a" />
-
-          {/* Left eye */}
-          <g className="eye-l" style={{
-            transformBox: "fill-box" as any, transformOrigin: "center",
-            animation: "blink 4.2s ease-in-out infinite",
-          }}>
-            <ellipse cx="45" cy="44" rx="6" ry="6" fill="white" />
-            <circle cx="46" cy="45" r="3" fill="#071a0a" />
-            <circle cx="47" cy="43" r="1.2" fill="white" />
-          </g>
-          {/* Right eye */}
-          <g className="eye-r" style={{
-            transformBox: "fill-box" as any, transformOrigin: "center",
-            animation: "blink 4.2s ease-in-out 0.06s infinite",
-          }}>
-            <ellipse cx="65" cy="44" rx="6" ry="6" fill="white" />
-            <circle cx="66" cy="45" r="3" fill="#071a0a" />
-            <circle cx="67" cy="43" r="1.2" fill="white" />
-          </g>
-
-          {/* Smile */}
-          <path d="M46,57 Q55,65 64,57" fill="none" stroke="#071a0a" strokeWidth="2.5" strokeLinecap="round" />
-
-          {/* SOL badge on lapel */}
-          <circle cx="37" cy="94" r="5.5" fill="#a78bfa" opacity="0.85" />
-          <text x="37" y="97" textAnchor="middle" fontSize="6" fontFamily="Inter,sans-serif" fill="white">{"\u25CE"}</text>
-        </g>
-      </svg>
-    </div>
-  );
-}
-
-// ---- Main component ----
-
-const T1 = 2600, T2 = 3300, T3 = 4400;
-
-export function IntroPage({ onEnter }: { onEnter: () => void }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const warpsRef = useRef<Warp[]>([]);
-  const t0Ref = useRef<number | null>(null);
-  const [finalVisible, setFinalVisible] = useState(false);
-  const [taglineShow, setTaglineShow] = useState(false);
-  const [btnShow, setBtnShow] = useState(false);
-  const [skipDark, setSkipDark] = useState(false);
-  const finalShownRef = useRef(false);
-  const dimRef = useRef({ w: 0, h: 0 });
-
-  // Initialize warps
-  useEffect(() => {
-    warpsRef.current = Array.from({ length: 24 }, () => new Warp(true));
-  }, []);
-
-  const showFinal = useCallback(() => {
-    if (finalShownRef.current) return;
-    finalShownRef.current = true;
-    const c = canvasRef.current;
-    if (c) c.style.display = "none";
-    setFinalVisible(true);
-    setSkipDark(true);
-    setTimeout(() => setTaglineShow(true), 200);
-    setTimeout(() => setBtnShow(true), 500);
-  }, []);
-
-  const skipToEnd = useCallback(() => {
-    t0Ref.current = performance.now() - T3 - 10;
-  }, []);
-
-  // Canvas animation loop
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d")!;
-    let W: number, H: number;
-
-    const resize = () => {
-      W = canvas.width = window.innerWidth;
-      H = canvas.height = window.innerHeight;
-      dimRef.current = { w: W, h: H };
+function disposeObject(object: THREE.Object3D) {
+  object.traverse((node) => {
+    const anyNode = node as THREE.Object3D & {
+      geometry?: THREE.BufferGeometry;
+      material?: THREE.Material | THREE.Material[];
     };
-    resize();
-    window.addEventListener("resize", resize);
+    anyNode.geometry?.dispose();
+    if (anyNode.material) {
+      const materials = Array.isArray(anyNode.material) ? anyNode.material : [anyNode.material];
+      materials.forEach((material) => material.dispose());
+    }
+  });
+}
 
-    let speed = 16;
-    let raf: number;
+function initHeroScene(canvas: HTMLCanvasElement, loading: HTMLElement) {
+  const renderer = new THREE.WebGLRenderer({
+    canvas,
+    alpha: true,
+    antialias: true,
+    powerPreference: "high-performance",
+  });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setClearColor(0x000000, 0);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 2.05;
 
-    const frame = (ts: number) => {
-      if (t0Ref.current === null) t0Ref.current = ts;
-      const ms = ts - t0Ref.current;
+  const scene = new THREE.Scene();
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const environment = pmrem.fromScene(new RoomEnvironment(), 0.02).texture;
+  scene.environment = environment;
 
-      if (ms < T1) {
-        // PHASE 1 - WARP
-        const prog = ms / T1;
-        ctx.fillStyle = "rgba(0,0,0,0.15)"; ctx.fillRect(0, 0, W, H);
-        drawBg(ctx, W, H, ms / 1000);
-        speed = 14 + prog * 80;
-        warpsRef.current.forEach(w => { w.update(speed); w.draw(ctx, W, H); });
-        if (ms < 100) overlayFlash(ctx, W, H, "#a78bfa", (1 - ms / 100) * 0.7);
-        if (ms > 880 && ms < 1040) {
-          const f = Math.sin((ms - 880) / 160 * Math.PI);
-          overlayFlash(ctx, W, H, "#ffffff", f * 0.22);
-        }
-        if (ms > T1 - 120) overlayFlash(ctx, W, H, "#fff", (ms - (T1 - 120)) / 120 * 0.5);
-      } else if (ms < T2) {
-        // PHASE 2 - GEO SWEEP
-        ctx.clearRect(0, 0, W, H);
-        drawGeo(ctx, W, H, (ms - T1) / (T2 - T1));
-      } else if (ms < T3) {
-        // PHASE 3 - IRIS REVEAL
-        ctx.clearRect(0, 0, W, H);
-        drawIris(ctx, W, H, (ms - T2) / (T3 - T2));
-      } else {
-        // PHASE 4 - FINAL
-        showFinal();
+  const camera = new THREE.PerspectiveCamera(26, 1, 0.1, 100);
+  camera.position.set(0, 0, 10.8);
+  camera.lookAt(0, 0, 0);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.48));
+
+  const key = new THREE.DirectionalLight(0xffffff, 4.2);
+  key.position.set(2.8, 3.2, 5.2);
+  scene.add(key);
+
+  const rim = new THREE.DirectionalLight(0xf2f2f2, 2.4);
+  rim.position.set(-4.4, 1.8, 2.2);
+  scene.add(rim);
+
+  const fill = new THREE.DirectionalLight(0xd8d8d8, 1.25);
+  fill.position.set(0, -3.4, 3.4);
+  scene.add(fill);
+
+  const backRim = new THREE.DirectionalLight(0xffffff, 1.65);
+  backRim.position.set(3.6, -2.2, -2.4);
+  scene.add(backRim);
+
+  const shimmer = new THREE.PointLight(0xffffff, 5.2, 18, 1.6);
+  shimmer.position.set(0, 1.5, 4.5);
+  scene.add(shimmer);
+
+  const front = new THREE.DirectionalLight(0xffffff, 1.45);
+  front.position.set(0, 0, 6);
+  scene.add(front);
+
+  const titleGroup = new THREE.Group();
+  const titleInner = new THREE.Group();
+  titleInner.rotation.x = Math.PI / 2;
+  titleGroup.add(titleInner);
+  scene.add(titleGroup);
+
+  let titleReady = false;
+  let titleRevealStart = 0;
+  let raf = 0;
+  let disposed = false;
+
+  const resize = () => {
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    if (!width || !height) return;
+    renderer.setSize(width, height, false);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+  };
+  resize();
+  window.addEventListener("resize", resize);
+
+  const loader = new GLTFLoader();
+  loader.load(
+    assetPath("brand-title.glb"),
+    (gltf) => {
+      if (disposed) {
+        disposeObject(gltf.scene);
         return;
       }
 
-      raf = requestAnimationFrame(frame);
-    };
+      const model = gltf.scene;
+      const rawBox = new THREE.Box3().setFromObject(model);
+      const rawCenter = rawBox.getCenter(new THREE.Vector3());
+      model.position.sub(rawCenter);
+      titleInner.add(model);
 
-    raf = requestAnimationFrame(frame);
+      const box = new THREE.Box3().setFromObject(titleInner);
+      const size = box.getSize(new THREE.Vector3());
+      const fovRad = (camera.fov * Math.PI) / 180;
+      const visibleHeight = 2 * Math.tan(fovRad / 2) * camera.position.z;
+      const visibleWidth = visibleHeight * camera.aspect;
+      const scaleByWidth = (visibleWidth * 0.74) / Math.max(0.001, size.x);
+      const scaleByHeight = (visibleHeight * 0.4) / Math.max(0.001, size.y);
+      titleInner.scale.setScalar(Math.min(scaleByWidth, scaleByHeight));
 
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("resize", resize);
-    };
-  }, [showFinal]);
+      const finalBox = new THREE.Box3().setFromObject(titleInner);
+      const finalCenter = finalBox.getCenter(new THREE.Vector3());
+      titleInner.position.sub(finalCenter);
 
-  // Click-to-skip (after 900ms)
+      const titleMat = new THREE.MeshPhysicalMaterial({
+        color: 0xf7f7f7,
+        metalness: 1,
+        roughness: 0.045,
+        clearcoat: 1,
+        clearcoatRoughness: 0.015,
+        envMapIntensity: 3.8,
+        emissive: 0xdcdcdc,
+        emissiveIntensity: 0.08,
+        reflectivity: 1,
+        iridescence: 0.06,
+        iridescenceIOR: 1.55,
+        iridescenceThicknessRange: [120, 220],
+        anisotropy: 0.72,
+        anisotropyRotation: Math.PI / 2,
+        sheen: 0.18,
+        sheenRoughness: 0.36,
+        sheenColor: 0xffffff,
+      });
+      const subMat = new THREE.MeshPhysicalMaterial({
+        color: 0xd8d8d8,
+        metalness: 0.88,
+        roughness: 0.16,
+        clearcoat: 0.95,
+        clearcoatRoughness: 0.06,
+        envMapIntensity: 2.45,
+        emissive: 0xbdbdbd,
+        emissiveIntensity: 0.1,
+        reflectivity: 0.9,
+        iridescence: 0.04,
+        iridescenceIOR: 1.35,
+        iridescenceThicknessRange: [120, 220],
+      });
+
+      model.traverse((object) => {
+        if (!isMesh(object)) return;
+        const materialName = Array.isArray(object.material)
+          ? object.material.map((material) => material.name).join(" ")
+          : object.material?.name ?? "";
+        const name = `${object.name} ${object.parent?.name ?? ""} ${materialName}`;
+        object.material = /sub/i.test(name) ? subMat : titleMat;
+        object.castShadow = false;
+        object.receiveShadow = false;
+      });
+
+      loading.classList.add("hidden");
+      titleReady = true;
+      titleRevealStart = performance.now();
+    },
+    undefined,
+    () => {
+      loading.textContent = "Scene fallback";
+      loading.classList.add("hidden");
+    },
+  );
+
+  const mouse = { x: 0, y: 0, tx: 0, ty: 0 };
+  const onMouseMove = (event: MouseEvent) => {
+    mouse.tx = (event.clientX / window.innerWidth - 0.5) * 0.12;
+    mouse.ty = (event.clientY / window.innerHeight - 0.5) * 0.06;
+  };
+  window.addEventListener("mousemove", onMouseMove);
+
+  const easeOutExpo = (x: number) => (x === 1 ? 1 : 1 - Math.pow(2, -10 * x));
+  const easeOutCubic = (x: number) => 1 - Math.pow(1 - x, 3);
+  const startedAt = performance.now();
+
+  const loop = () => {
+    const elapsedSeconds = (performance.now() - startedAt) / 1000;
+    mouse.x += (mouse.tx - mouse.x) * 0.05;
+    mouse.y += (mouse.ty - mouse.y) * 0.05;
+
+    let reveal = 1;
+    if (titleReady) {
+      reveal = Math.min(1, (performance.now() - titleRevealStart) / 2400);
+    }
+    const eased = easeOutExpo(reveal);
+    const easedC = easeOutCubic(reveal);
+    const introScale = 1 + (1 - eased) * 0.55;
+    const introRotY = (1 - easedC) * 0.62;
+    const introRotX = (1 - easedC) * -0.24;
+    const introZ = (1 - eased) * -1.55;
+    const introOpacity = titleReady ? eased : 1;
+    const idleMix = easedC;
+
+    titleGroup.scale.setScalar(introScale);
+    titleGroup.position.z = introZ;
+    titleGroup.rotation.y = introRotY + (mouse.x + Math.sin(elapsedSeconds * 0.35) * 0.014) * idleMix;
+    titleGroup.rotation.x = introRotX + (-mouse.y + Math.sin(elapsedSeconds * 0.25) * 0.008) * idleMix;
+    titleGroup.position.y = 0.98 + Math.sin(elapsedSeconds * 0.45) * 0.028 * idleMix;
+
+    shimmer.position.x = Math.sin(elapsedSeconds * 0.35) * 4;
+    shimmer.position.y = 1.4 + Math.sin(elapsedSeconds * 0.5) * 0.5;
+    shimmer.position.z = 4.2 + Math.cos(elapsedSeconds * 0.35) * 0.4;
+    shimmer.intensity = (4.4 + Math.sin(elapsedSeconds * 0.6) * 0.55) * idleMix;
+
+    titleInner.traverse((object) => {
+      if (!isMesh(object)) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      materials.forEach((material) => {
+        material.transparent = introOpacity < 1;
+        material.opacity = introOpacity;
+        if (material instanceof THREE.MeshPhysicalMaterial) {
+          material.emissiveIntensity = 0.08 + Math.sin(elapsedSeconds * 0.7) * 0.018;
+          material.envMapIntensity = 3.1 + Math.sin(elapsedSeconds * 0.4) * 0.18;
+        }
+      });
+    });
+
+    renderer.render(scene, camera);
+    raf = requestAnimationFrame(loop);
+  };
+  loop();
+
+  return () => {
+    disposed = true;
+    cancelAnimationFrame(raf);
+    window.removeEventListener("resize", resize);
+    window.removeEventListener("mousemove", onMouseMove);
+    disposeObject(scene);
+    environment.dispose();
+    pmrem.dispose();
+    renderer.dispose();
+  };
+}
+
+function initPhoneScene(
+  canvas: HTMLCanvasElement,
+  section: HTMLElement,
+  indicator: HTMLElement,
+  features: NodeListOf<HTMLElement>,
+  captionText: HTMLElement,
+) {
+  const renderer = new THREE.WebGLRenderer({
+    canvas,
+    alpha: true,
+    antialias: true,
+    powerPreference: "high-performance",
+  });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setClearColor(0x000000, 0);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.18;
+
+  const scene = new THREE.Scene();
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const environment = pmrem.fromScene(new RoomEnvironment(), 0.03).texture;
+  scene.environment = environment;
+
+  const camera = new THREE.PerspectiveCamera(26, 1, 0.1, 100);
+  camera.position.set(0, 0, 8.6);
+  camera.lookAt(0, 0, 0);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.46));
+  const key = new THREE.DirectionalLight(0xffffff, 2.2);
+  key.position.set(2.6, 3.4, 4.8);
+  scene.add(key);
+  const rim = new THREE.DirectionalLight(0xe6e6e6, 1.55);
+  rim.position.set(-3.4, 1.4, 2.4);
+  scene.add(rim);
+  const fill = new THREE.DirectionalLight(0xffffff, 0.65);
+  fill.position.set(0, -2, 3);
+  scene.add(fill);
+  const edge = new THREE.DirectionalLight(0xffffff, 0.9);
+  edge.position.set(2.6, -1.8, -2.4);
+  scene.add(edge);
+
+  const phoneOuter = new THREE.Group();
+  const phoneInner = new THREE.Group();
+  phoneOuter.add(phoneInner);
+  scene.add(phoneOuter);
+
+  const textureLoader = new THREE.TextureLoader();
+  const screenTextures = [textureLoader.load(assetPath("screen1.jpeg")), textureLoader.load(assetPath("screen2.jpeg"))];
+  screenTextures.forEach((texture) => {
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = 8;
+    texture.flipY = false;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.center.set(0.5, 0.5);
+    texture.repeat.set(1, 1);
+  });
+
+  let screenMat: THREE.MeshBasicMaterial | null = null;
+  let current = 0;
+  let manualLock = 0;
+  let raf = 0;
+  let autoTimer = 0;
+  let disposed = false;
+
+  const setSlide = (index: number, manual = false) => {
+    current = index;
+    if (screenMat && screenTextures[index]) {
+      screenMat.map = screenTextures[index];
+      screenMat.needsUpdate = true;
+    }
+    indicator.querySelectorAll("button").forEach((button, buttonIndex) => {
+      button.classList.toggle("active", buttonIndex === index);
+    });
+    features.forEach((feature, featureIndex) => {
+      feature.classList.toggle("is-active", featureIndex === index);
+    });
+    captionText.textContent = `0${index + 1} / 02 · ${index === 0 ? "Home" : "Trade"}`;
+    if (manual) manualLock = performance.now() + 2400;
+  };
+
+  const loader = new GLTFLoader();
+  loader.load(
+    assetPath("phone-model.glb"),
+    (gltf) => {
+      if (disposed) {
+        disposeObject(gltf.scene);
+        return;
+      }
+
+      const model = gltf.scene;
+      const box = new THREE.Box3().setFromObject(model);
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      model.position.sub(center);
+      model.scale.setScalar(3.35 / Math.max(0.001, Math.max(size.x, size.y, size.z)));
+      phoneInner.add(model);
+
+      let bestScreen: THREE.Mesh | null = null;
+      let bestArea = 0;
+      const meshes: THREE.Mesh[] = [];
+
+      model.traverse((object) => {
+        if (!isMesh(object)) return;
+        meshes.push(object);
+        const materialName = Array.isArray(object.material)
+          ? object.material.map((material) => material.name).join(" ")
+          : object.material?.name ?? "";
+        const name = `${object.name} ${materialName}`.toLowerCase();
+        if (/screen|display|glass|lcd/.test(name)) {
+          bestScreen = object;
+        }
+
+        const meshBox = new THREE.Box3().setFromObject(object);
+        const meshSize = meshBox.getSize(new THREE.Vector3());
+        const dims = [meshSize.x, meshSize.y, meshSize.z].sort((a, b) => b - a);
+        const area = dims[0] * dims[1];
+        const flatness = dims[2] / Math.max(0.001, dims[1]);
+        if (!bestScreen && flatness < 0.15 && area > bestArea) {
+          bestArea = area;
+          bestScreen = object;
+        }
+      });
+
+      const selectedScreen = bestScreen as THREE.Mesh | null;
+      const phoneCaseMat = new THREE.MeshPhysicalMaterial({
+        color: 0xf4f4f4,
+        metalness: 1,
+        roughness: 0.05,
+        clearcoat: 1,
+        clearcoatRoughness: 0.018,
+        envMapIntensity: 3.5,
+        emissive: 0xd8d8d8,
+        emissiveIntensity: 0.06,
+        reflectivity: 1,
+        iridescence: 0.05,
+        iridescenceIOR: 1.5,
+        iridescenceThicknessRange: [120, 220],
+        anisotropy: 0.68,
+        anisotropyRotation: Math.PI / 2,
+        sheen: 0.16,
+        sheenRoughness: 0.36,
+        sheenColor: 0xffffff,
+      });
+
+      meshes.forEach((mesh) => {
+        if (mesh === selectedScreen) return;
+        mesh.material = phoneCaseMat;
+      });
+
+      if (selectedScreen) {
+        screenMat = new THREE.MeshBasicMaterial({
+          map: screenTextures[0],
+          toneMapped: false,
+        });
+        selectedScreen.material = screenMat;
+      }
+    },
+    undefined,
+    () => {
+      if (disposed) return;
+      const geometry = new THREE.PlaneGeometry(1.6, 3.3);
+      screenMat = new THREE.MeshBasicMaterial({ map: screenTextures[0], toneMapped: false });
+      phoneInner.add(new THREE.Mesh(geometry, screenMat));
+    },
+  );
+
+  const resize = () => {
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    if (!width || !height) return;
+    renderer.setSize(width, height, false);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+  };
+  resize();
+  window.addEventListener("resize", resize);
+
+  const mouse = { x: 0, y: 0, tx: 0, ty: 0 };
+  const responsive = { scale: 1, y: 0 };
+  const updateResponsivePhone = () => {
+    const width = canvas.clientWidth;
+    if (width < 440) {
+      responsive.scale = 0.72;
+      responsive.y = -0.24;
+    } else if (width < 760) {
+      responsive.scale = 0.86;
+      responsive.y = -0.12;
+    } else {
+      responsive.scale = 1;
+      responsive.y = 0;
+    }
+  };
+  updateResponsivePhone();
+  const onMouseMove = (event: MouseEvent) => {
+    mouse.tx = (event.clientX / window.innerWidth - 0.5) * 1.8;
+    mouse.ty = (event.clientY / window.innerHeight - 0.5) * 0.82;
+  };
+  window.addEventListener("mousemove", onMouseMove);
+  window.addEventListener("resize", updateResponsivePhone);
+
+  const startedAt = performance.now();
+  const loop = () => {
+    const elapsedSeconds = (performance.now() - startedAt) / 1000;
+    mouse.x += (mouse.tx - mouse.x) * 0.2;
+    mouse.y += (mouse.ty - mouse.y) * 0.2;
+    phoneOuter.scale.setScalar(responsive.scale);
+    phoneOuter.rotation.y = -0.22 + mouse.x + Math.sin(elapsedSeconds * 0.36) * 0.035;
+    phoneOuter.rotation.x = -0.04 - mouse.y + Math.sin(elapsedSeconds * 0.28) * 0.015;
+    phoneOuter.position.y = responsive.y + Math.sin(elapsedSeconds * 0.5) * 0.035;
+    renderer.render(scene, camera);
+    raf = requestAnimationFrame(loop);
+  };
+  loop();
+
+  const buttons = Array.from(indicator.querySelectorAll<HTMLButtonElement>("button"));
+  const onIndicatorClick = (event: Event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    setSlide(Number(button.dataset.i ?? 0), true);
+  };
+  buttons.forEach((button) => button.addEventListener("click", onIndicatorClick));
+
+  const onFeatureClick = (event: Event) => {
+    const feature = event.currentTarget as HTMLElement;
+    setSlide(Number(feature.dataset.step ?? 0), true);
+  };
+  features.forEach((feature) => feature.addEventListener("click", onFeatureClick));
+
+  const onScroll = () => {
+    if (performance.now() < manualLock) return;
+    const rect = section.getBoundingClientRect();
+    const total = section.offsetHeight - window.innerHeight;
+    const progress = Math.max(0, Math.min(1, -rect.top / total));
+    const target = progress < 0.5 ? 0 : 1;
+    if (target !== current) setSlide(target, false);
+  };
+  const scrollContainer = section.closest(".intro-page");
+  const scrollTarget: EventTarget = scrollContainer ?? window;
+  scrollTarget.addEventListener("scroll", onScroll, { passive: true });
+  if (scrollTarget !== window) {
+    window.addEventListener("scroll", onScroll, { passive: true });
+  }
+
+  autoTimer = window.setInterval(() => {
+    const rect = section.getBoundingClientRect();
+    const visible = rect.top < window.innerHeight * 0.4 && rect.bottom > window.innerHeight * 0.4;
+    if (!visible || performance.now() < manualLock) return;
+    setSlide(1 - current, false);
+  }, 5200);
+
+  return () => {
+    disposed = true;
+    cancelAnimationFrame(raf);
+    window.clearInterval(autoTimer);
+    window.removeEventListener("resize", resize);
+    window.removeEventListener("resize", updateResponsivePhone);
+    window.removeEventListener("mousemove", onMouseMove);
+    scrollTarget.removeEventListener("scroll", onScroll);
+    if (scrollTarget !== window) {
+      window.removeEventListener("scroll", onScroll);
+    }
+    buttons.forEach((button) => button.removeEventListener("click", onIndicatorClick));
+    features.forEach((feature) => feature.removeEventListener("click", onFeatureClick));
+    screenTextures.forEach((texture) => texture.dispose());
+    disposeObject(scene);
+    environment.dispose();
+    pmrem.dispose();
+    renderer.dispose();
+  };
+}
+
+function initSolanaScene(canvas: HTMLCanvasElement, section: HTMLElement) {
+  const renderer = new THREE.WebGLRenderer({
+    canvas,
+    alpha: true,
+    antialias: true,
+    powerPreference: "high-performance",
+  });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setClearColor(0x000000, 0);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.35;
+
+  const scene = new THREE.Scene();
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const environment = pmrem.fromScene(new RoomEnvironment(), 0.03).texture;
+  scene.environment = environment;
+
+  const camera = new THREE.PerspectiveCamera(26, 1, 0.1, 100);
+  camera.position.set(0, 0, 8.6);
+  camera.lookAt(0, 0, 0);
+
+  scene.add(new THREE.AmbientLight(0xffd9a8, 0.55));
+  const key = new THREE.DirectionalLight(0xfff1d8, 2.4);
+  key.position.set(2.6, 3.4, 4.8);
+  scene.add(key);
+  const rim = new THREE.DirectionalLight(0xffae3a, 1.85);
+  rim.position.set(-3.4, 1.4, 2.4);
+  scene.add(rim);
+  const fill = new THREE.DirectionalLight(0xffc071, 0.85);
+  fill.position.set(0, -2, 3);
+  scene.add(fill);
+  const edge = new THREE.DirectionalLight(0xff8a1c, 1.1);
+  edge.position.set(2.6, -1.8, -2.4);
+  scene.add(edge);
+  const uplight = new THREE.PointLight(0xffae3a, 1.6, 8, 1.4);
+  uplight.position.set(0, -1.4, 1.6);
+  scene.add(uplight);
+
+  const modelOuter = new THREE.Group();
+  const modelInner = new THREE.Group();
+  modelInner.position.y = 1.55;
+  modelOuter.add(modelInner);
+  scene.add(modelOuter);
+
+  const cosmicCount = 700;
+  const cosmicPositions = new Float32Array(cosmicCount * 3);
+  const cosmicColors = new Float32Array(cosmicCount * 3);
+  const cosmicSpeeds = new Float32Array(cosmicCount);
+  const cosmicSeeds = new Float32Array(cosmicCount);
+  const cosmicTopY = 4.4;
+  const cosmicBottomY = -0.6;
+  for (let i = 0; i < cosmicCount; i++) {
+    const r = 0.3 + Math.random() * 3.4;
+    const theta = Math.random() * Math.PI * 2;
+    cosmicPositions[i * 3 + 0] = Math.cos(theta) * r;
+    cosmicPositions[i * 3 + 1] = cosmicBottomY + Math.random() * (cosmicTopY - cosmicBottomY);
+    cosmicPositions[i * 3 + 2] = Math.sin(theta) * r;
+    cosmicSpeeds[i] = 0.18 + Math.random() * 0.45;
+    cosmicSeeds[i] = Math.random() * Math.PI * 2;
+    cosmicColors[i * 3 + 0] = 1.0;
+    cosmicColors[i * 3 + 1] = 0.92;
+    cosmicColors[i * 3 + 2] = 0.4;
+  }
+  const cosmicGeom = new THREE.BufferGeometry();
+  cosmicGeom.setAttribute("position", new THREE.BufferAttribute(cosmicPositions, 3));
+  cosmicGeom.setAttribute("color", new THREE.BufferAttribute(cosmicColors, 3));
+  const cosmicMat = new THREE.PointsMaterial({
+    vertexColors: true,
+    size: 0.075,
+    sizeAttenuation: true,
+    transparent: true,
+    opacity: 1,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  const cosmic = new THREE.Points(cosmicGeom, cosmicMat);
+  cosmic.renderOrder = 3;
+  scene.add(cosmic);
+
+  const cosmicHaloMat = new THREE.PointsMaterial({
+    color: 0xffd24a,
+    size: 0.22,
+    sizeAttenuation: true,
+    transparent: true,
+    opacity: 0.45,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  const cosmicHalo = new THREE.Points(cosmicGeom, cosmicHaloMat);
+  cosmicHalo.renderOrder = 2;
+  scene.add(cosmicHalo);
+
+  let raf = 0;
+  let disposed = false;
+  let lastFrame = performance.now() / 1000;
+
+  const loader = new GLTFLoader();
+  loader.load(
+    assetPath("solana-model.glb"),
+    (gltf) => {
+      if (disposed) {
+        disposeObject(gltf.scene);
+        return;
+      }
+      const model = gltf.scene;
+      const box = new THREE.Box3().setFromObject(model);
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      model.position.sub(center);
+      model.scale.setScalar(3.35 / Math.max(0.001, Math.max(size.x, size.y, size.z)));
+      modelInner.add(model);
+
+      const goldColor = new THREE.Color(0xf7d000);
+      const goldEmissive = new THREE.Color(0x2a2000);
+      const textBlack = new THREE.Color(0x000000);
+      const textPattern = /(^|[^a-z])(text|label|caption|glyph)([^a-z]|$)/i;
+      const cubeMeshes: THREE.Mesh[] = [];
+      const debugMeshNames: string[] = [];
+      const tmpSize = new THREE.Vector3();
+      const looksLikeLabelGeometry = (mesh: THREE.Mesh) => {
+        if (!mesh.geometry) return false;
+        if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+        const bb = mesh.geometry.boundingBox;
+        if (!bb) return false;
+        bb.getSize(tmpSize);
+        const longest = Math.max(tmpSize.x, tmpSize.y, tmpSize.z);
+        const shortest = Math.min(tmpSize.x, tmpSize.y, tmpSize.z);
+        if (longest < 0.6) return true;
+        const aspect = longest / Math.max(shortest, 1e-6);
+        return aspect > 18 && longest < 1.6;
+      };
+      model.traverse((object) => {
+        if (!isMesh(object)) return;
+        object.castShadow = false;
+        object.receiveShadow = false;
+        const meshName = `${object.name ?? ""}`.toLowerCase();
+        const parentName = `${object.parent?.name ?? ""}`.toLowerCase();
+        debugMeshNames.push(`${object.name}|parent=${object.parent?.name ?? ""}`);
+        const mats = Array.isArray(object.material) ? object.material : [object.material];
+        const looksLikeText =
+          textPattern.test(meshName) ||
+          textPattern.test(parentName) ||
+          looksLikeLabelGeometry(object);
+
+        if (looksLikeText) {
+          mats.forEach((mat) => {
+            if (!mat) return;
+            const m = mat as THREE.MeshStandardMaterial;
+            if (m.color) m.color.copy(textBlack);
+            if (m.emissive) {
+              m.emissive.set(0x000000);
+              m.emissiveIntensity = 0;
+            }
+            m.metalness = 0;
+            m.roughness = 0.6;
+            m.transparent = false;
+            m.depthTest = false;
+            m.depthWrite = false;
+            m.polygonOffset = true;
+            m.polygonOffsetFactor = -8;
+            m.polygonOffsetUnits = -8;
+            m.toneMapped = false;
+            m.needsUpdate = true;
+          });
+          object.renderOrder = 999;
+          object.frustumCulled = false;
+          return;
+        }
+
+        const hasTextureMap = mats.some((m) => {
+          const sm = m as THREE.MeshStandardMaterial | null;
+          return !!(sm && (sm.map || sm.emissiveMap));
+        });
+
+        if (hasTextureMap) {
+          object.frustumCulled = false;
+          return;
+        }
+
+        const replacement = new THREE.MeshStandardMaterial({
+          color: goldColor,
+          emissive: goldEmissive,
+          emissiveIntensity: 0.22,
+          metalness: 0.95,
+          roughness: 0.22,
+          envMapIntensity: 1.6,
+          transparent: false,
+          opacity: 1,
+          alphaTest: 0,
+          depthTest: true,
+          depthWrite: true,
+          side: THREE.FrontSide,
+        });
+        mats.forEach((mat) => mat?.dispose?.());
+        if (Array.isArray(object.material)) {
+          object.material = object.material.map(() => replacement);
+        } else {
+          object.material = replacement;
+        }
+        cubeMeshes.push(object);
+      });
+
+      const blackEdgeMat = new THREE.LineBasicMaterial({
+        color: 0x000000,
+        transparent: false,
+        opacity: 1,
+        toneMapped: false,
+      });
+      cubeMeshes.forEach((mesh) => {
+        if (!mesh.geometry) return;
+        const edges = new THREE.EdgesGeometry(mesh.geometry, 24);
+        const line = new THREE.LineSegments(edges, blackEdgeMat);
+        line.renderOrder = 5;
+        mesh.add(line);
+      });
+      console.log("[solana-model meshes]", debugMeshNames);
+    },
+    undefined,
+    (err) => console.warn("solana-model.glb load error:", err),
+  );
+
+  const resize = () => {
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    if (!width || !height) return;
+    renderer.setSize(width, height, false);
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+  };
+  resize();
+  window.addEventListener("resize", resize);
+
+  const mouse = { x: 0, y: 0, tx: 0, ty: 0 };
+  const responsive = { scale: 1, y: 0 };
+  const updateResponsive = () => {
+    const width = canvas.clientWidth;
+    if (width < 440) {
+      responsive.scale = 0.72;
+      responsive.y = -0.24;
+    } else if (width < 760) {
+      responsive.scale = 0.86;
+      responsive.y = -0.12;
+    } else {
+      responsive.scale = 1;
+      responsive.y = 0;
+    }
+  };
+  updateResponsive();
+  const onMouseMove = (event: MouseEvent) => {
+    mouse.tx = (event.clientX / window.innerWidth - 0.5) * 1.6;
+    mouse.ty = (event.clientY / window.innerHeight - 0.5) * 0.7;
+  };
+  window.addEventListener("mousemove", onMouseMove);
+  window.addEventListener("resize", updateResponsive);
+
+  const startedAt = performance.now();
+  const loop = () => {
+    const nowSeconds = performance.now() / 1000;
+    const dt = Math.min(0.05, Math.max(0.001, nowSeconds - lastFrame));
+    lastFrame = nowSeconds;
+    const elapsedSeconds = (performance.now() - startedAt) / 1000;
+    mouse.x += (mouse.tx - mouse.x) * 0.18;
+    mouse.y += (mouse.ty - mouse.y) * 0.18;
+    modelOuter.scale.setScalar(responsive.scale);
+    modelOuter.rotation.y = mouse.x + Math.sin(elapsedSeconds * 0.32) * 0.04;
+    modelOuter.rotation.x = -mouse.y + Math.sin(elapsedSeconds * 0.26) * 0.018;
+    modelOuter.position.y = responsive.y + Math.sin(elapsedSeconds * 0.45) * 0.04;
+    const cosmicArr = (cosmicGeom.getAttribute("position") as THREE.BufferAttribute).array as Float32Array;
+    const cosmicColorArr = (cosmicGeom.getAttribute("color") as THREE.BufferAttribute).array as Float32Array;
+    for (let i = 0; i < cosmicCount; i++) {
+      let y = cosmicArr[i * 3 + 1] + cosmicSpeeds[i] * dt;
+      if (y > cosmicTopY) y = cosmicBottomY;
+      cosmicArr[i * 3 + 1] = y;
+      cosmicArr[i * 3 + 0] += Math.sin(elapsedSeconds * 0.9 + cosmicSeeds[i]) * 0.0008;
+      cosmicArr[i * 3 + 2] += Math.cos(elapsedSeconds * 0.7 + cosmicSeeds[i]) * 0.0008;
+      const tw = 0.4 + (Math.sin(elapsedSeconds * 4.2 + cosmicSeeds[i] * 1.7) * 0.5 + 0.5) * 0.6;
+      cosmicColorArr[i * 3 + 0] = 1.0 * tw;
+      cosmicColorArr[i * 3 + 1] = 0.92 * tw;
+      cosmicColorArr[i * 3 + 2] = 0.4 * tw;
+    }
+    (cosmicGeom.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
+    (cosmicGeom.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
+    cosmicHaloMat.opacity = 0.4 + Math.sin(elapsedSeconds * 2.1) * 0.15;
+    renderer.render(scene, camera);
+    raf = requestAnimationFrame(loop);
+  };
+  loop();
+
+  void section;
+
+  return () => {
+    disposed = true;
+    cancelAnimationFrame(raf);
+    window.removeEventListener("resize", resize);
+    window.removeEventListener("resize", updateResponsive);
+    window.removeEventListener("mousemove", onMouseMove);
+    disposeObject(scene);
+    environment.dispose();
+    pmrem.dispose();
+    renderer.dispose();
+  };
+}
+
+export function IntroPage({ onEnter }: { onEnter: () => void }) {
+  const pageRef = useRef<HTMLElement>(null);
+  const heroCanvasRef = useRef<HTMLCanvasElement>(null);
+  const heroLoadingRef = useRef<HTMLDivElement>(null);
+  const solanaCanvasRef = useRef<HTMLCanvasElement>(null);
+  const solanaSectionRef = useRef<HTMLElement>(null);
+  const phoneCanvasRef = useRef<HTMLCanvasElement>(null);
+  const phoneSectionRef = useRef<HTMLElement>(null);
+  const phoneIndicatorRef = useRef<HTMLDivElement>(null);
+  const phoneFeaturesRef = useRef<HTMLDivElement>(null);
+  const phoneCaptionRef = useRef<HTMLSpanElement>(null);
+
   useEffect(() => {
-    let clickOk = false;
-    const timer = setTimeout(() => { clickOk = true; }, 900);
-    const handler = (e: MouseEvent) => {
-      if (!clickOk) return;
-      if ((e.target as HTMLElement).closest("#enter-btn") || (e.target as HTMLElement).closest("#skip")) return;
-      skipToEnd();
-    };
-    document.body.addEventListener("click", handler);
-    return () => {
-      clearTimeout(timer);
-      document.body.removeEventListener("click", handler);
-    };
-  }, [skipToEnd]);
+    const canvas = heroCanvasRef.current;
+    const loading = heroLoadingRef.current;
+    if (!canvas || !loading) return undefined;
+    return initHeroScene(canvas, loading);
+  }, []);
+
+  useEffect(() => {
+    const canvas = solanaCanvasRef.current;
+    const section = solanaSectionRef.current;
+    if (!canvas || !section) return undefined;
+    return initSolanaScene(canvas, section);
+  }, []);
+
+  useEffect(() => {
+    const canvas = phoneCanvasRef.current;
+    const section = phoneSectionRef.current;
+    const indicator = phoneIndicatorRef.current;
+    const features = phoneFeaturesRef.current?.querySelectorAll<HTMLElement>(".intro-phone-feature");
+    const caption = phoneCaptionRef.current;
+    if (!canvas || !section || !indicator || !features || !caption) return undefined;
+    return initPhoneScene(canvas, section, indicator, features, caption);
+  }, []);
+
+  useEffect(() => {
+    const section = solanaSectionRef.current;
+    if (!section) return undefined;
+    const observer = new IntersectionObserver(
+      (entries) => entries.forEach((e) => section.classList.toggle("in-view", e.isIntersecting)),
+      { threshold: 0.12 },
+    );
+    observer.observe(section);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const section = phoneSectionRef.current;
+    if (!section) return undefined;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          section.classList.toggle("in-view", entry.isIntersecting);
+        });
+      },
+      { threshold: 0.15 },
+    );
+    observer.observe(section);
+    return () => observer.disconnect();
+  }, []);
+
+  const scrollToPhone = () => {
+    phoneSectionRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
 
   return (
-    <div style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}>
-      {/* Keyframe animations injected as style tag */}
-      <style>{`
-        @keyframes idle {
-          0%, 100% { transform: translateY(0px); }
-          50% { transform: translateY(-6px); }
-        }
-        @keyframes blink {
-          0%, 84%, 94%, 100% { transform: scaleY(1); }
-          89% { transform: scaleY(0.08); }
-        }
-        @keyframes raiseArm {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(-118deg); }
-        }
-        @keyframes gentleWave {
-          0%, 100% { transform: rotate(-118deg); }
-          50% { transform: rotate(-130deg); }
-        }
-        @keyframes armR {
-          0%, 100% { transform: rotate(0deg); }
-          50% { transform: rotate(-5deg); }
-        }
-        @keyframes shadow {
-          0%, 100% { transform: scaleX(1); opacity: 0.18; }
-          50% { transform: scaleX(0.82); opacity: 0.1; }
-        }
-        @keyframes fadeUp {
-          from { transform: translateY(14px); opacity: 0; }
-          to { transform: translateY(0); opacity: 1; }
-        }
-        @keyframes kickLean {
-          0%, 2.5%, 100% { transform: rotate(0deg) translateX(0); }
-          1% { transform: rotate(-5deg) translateX(-4px); }
-          2% { transform: rotate(7deg) translateX(5px); }
-          4% { transform: rotate(0deg) translateX(0); }
-        }
-        @keyframes kickLeg {
-          0%, 1.5%, 14%, 100% { transform: rotate(0deg); }
-          0.8% { transform: rotate(-32deg); }
-          2.2% { transform: rotate(58deg); }
-          5% { transform: rotate(22deg); }
-          9% { transform: rotate(0deg); }
-        }
-        @keyframes wordHit {
-          0%, 2.2%, 100% { transform: translateX(0) rotate(0deg); }
-          4% { transform: translateX(24px) rotate(2.5deg); }
-          9% { transform: translateX(58px) rotate(6deg); }
-          16% { transform: translateX(36px) rotate(3deg); }
-          22% { transform: translateX(10px) rotate(1deg); }
-          27% { transform: translateX(0) rotate(0deg); }
-        }
-      `}</style>
+    <main ref={pageRef} className="intro-page">
+      <nav className="intro-nav">
+        <button className="intro-brand" onClick={() => pageRef.current?.scrollTo({ top: 0, behavior: "smooth" })}>
+          <span className="intro-brand-mark" aria-hidden="true" />
+          <span className="intro-brand-text">IDLExchange</span>
+        </button>
+      </nav>
 
-      {/* Final screen (mint green) */}
-      <div style={{
-        position: "fixed", inset: 0, zIndex: 5,
-        background: "#00FF57",
-        display: "flex", flexDirection: "column",
-        alignItems: "center", justifyContent: "center",
-        opacity: finalVisible ? 1 : 0,
-        transition: "opacity 0.3s",
-        pointerEvents: finalVisible ? "auto" : "none",
-      }}>
-        {/* Geometric SVG lines */}
-        <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible" }}
-          viewBox="0 0 1440 900" preserveAspectRatio="none">
-          <line x1="220" y1="0" x2="0" y2="220" stroke="#071a0a" strokeWidth="1.2" />
-          <line x1="1220" y1="0" x2="1440" y2="220" stroke="#071a0a" strokeWidth="1.2" />
-          <line x1="0" y1="680" x2="220" y2="900" stroke="#071a0a" strokeWidth="1.2" />
-          <line x1="1440" y1="680" x2="1220" y2="900" stroke="#071a0a" strokeWidth="1.2" />
-          <path d="M30 38 L30 18 L50 18" fill="none" stroke="#071a0a" strokeWidth="2.5" />
-          <path d="M1410 38 L1410 18 L1390 18" fill="none" stroke="#071a0a" strokeWidth="2.5" />
-          <path d="M30 862 L30 882 L50 882" fill="none" stroke="#071a0a" strokeWidth="2.5" />
-          <path d="M1410 862 L1410 882 L1390 882" fill="none" stroke="#071a0a" strokeWidth="2.5" />
-        </svg>
+      <section className="intro-hero" aria-label="IDLExchange landing">
+        <div className="intro-hero-bg" style={{ backgroundImage: `url("${assetPath("hero-bg.png")}")` }} />
+        <canvas ref={heroCanvasRef} className="intro-hero-canvas" />
+        <div ref={heroLoadingRef} className="intro-canvas-loading">
+          Initializing scene · 3D
+        </div>
 
-        <div style={{ position: "relative", zIndex: 2, display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
-          {/* Hero row: character + branding */}
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 40, justifyContent: "center", marginBottom: 8 }}>
-            <CharacterSVG />
+        <div className="intro-frame-corner intro-frame-corner-tl" aria-hidden="true">
+          <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+            <path d="M0 0 L0 12 M0 0 L12 0" stroke="rgba(255,255,255,0.35)" strokeWidth="1" />
+          </svg>
+        </div>
+        <div className="intro-frame-corner intro-frame-corner-br" aria-hidden="true">
+          <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+            <path d="M36 36 L36 24 M36 36 L24 36" stroke="rgba(255,255,255,0.35)" strokeWidth="1" />
+          </svg>
+        </div>
 
-            {/* Branding column */}
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", paddingBottom: 22 }}>
-              <div style={{
-                fontSize: 72, fontWeight: 900,
-                letterSpacing: "-0.04em", color: "#ffffff",
-                lineHeight: 1, textAlign: "left",
-                animation: "wordHit 6s ease-in-out 1.5s infinite",
-              }}>
-                IDL<span style={{ color: "#071a0a" }}>Exchange</span>
-              </div>
-              <div style={{
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 11, letterSpacing: "0.16em",
-                color: "rgba(7,26,10,0.45)", marginTop: 8,
-                textTransform: "uppercase",
-              }}>
-                Solana &middot; Atomic &middot; DeFi
-              </div>
+        <div className="intro-hero-content">
+          <p className="intro-hero-sub">
+            Eighteen machine-checked Lean 4 theorems guard every state transition. Discrete frequent batch
+            auctions neutralize MEV. One transaction in, one out.
+          </p>
+          <div className="intro-hero-actions">
+            <button className="intro-btn intro-btn-primary" onClick={onEnter}>
+              Open the exchange
+            </button>
+            <button className="intro-btn" onClick={scrollToPhone}>
+              View mobile app
+            </button>
+          </div>
+        </div>
+
+        <div className="intro-hero-meta" aria-label="Protocol metrics">
+          <div className="intro-hero-meta-col">
+            <strong>18 / 18</strong>
+            <span>Lean theorems · zero sorry</span>
+          </div>
+          <div className="intro-hero-meta-col intro-align-center">
+            <strong>DFBA</strong>
+            <span>MEV-resistant execution</span>
+          </div>
+          <div className="intro-hero-meta-col intro-align-right">
+            <strong>$148.4M · 24h</strong>
+            <span>Verified volume</span>
+          </div>
+        </div>
+
+        <div className="intro-scroll-cue" aria-hidden="true">
+          <span>Scroll</span>
+          <div className="intro-scroll-line" />
+        </div>
+      </section>
+
+      <section ref={solanaSectionRef} className="intro-solana-section" aria-label="Protocol architecture">
+        <div className="intro-solana-sticky">
+          <div className="intro-solana-copy">
+            <div className="intro-solana-eyebrow">Protocol · Architecture</div>
+            <h2 className="intro-solana-title">
+              Four primitives.<br /><b>One verified</b> stack.
+            </h2>
+            <p className="intro-solana-desc">
+              Every module formally verified, MEV-resistant, and live on mainnet — built on Solana.
+            </p>
+            <ul className="intro-solana-pillars">
+              <li><span>01</span>Yield Back</li>
+              <li><span>02</span>Margin Gradual Deleveraging</li>
+              <li><span>03</span>Portfolio Margin</li>
+              <li><span>04</span>Power Perps</li>
+            </ul>
+          </div>
+          <div className="intro-solana-stage">
+            <canvas ref={solanaCanvasRef} className="intro-solana-canvas" />
+            <div className="intro-solana-glow" aria-hidden="true" />
+          </div>
+        </div>
+      </section>
+
+      <section ref={phoneSectionRef} className="intro-phone-section" aria-label="IDLExchange mobile app">
+        <div className="intro-phone-sticky">
+          <div className="intro-phone-copy">
+            <div className="intro-phone-eyebrow">Mobile · Native</div>
+            <h2 className="intro-phone-title">
+              The whole <b>desk</b>
+              <br />
+              in your pocket.
+            </h2>
+            <p className="intro-phone-desc">
+              From discovery to position management, every primitive of the protocol is rebuilt for one thumb.
+              Place orders, watch funding, and hold collateral on a verified vault.
+            </p>
+
+            <div ref={phoneFeaturesRef} className="intro-phone-features">
+              <button className="intro-phone-feature is-active" data-step="0">
+                <span className="intro-phone-num">01</span>
+                <span className="intro-phone-label">
+                  Home, verified surface
+                  <small>Glance at SOL, scan signals, jump into a market.</small>
+                </span>
+                <span className="intro-phone-dot" />
+              </button>
+              <button className="intro-phone-feature" data-step="1">
+                <span className="intro-phone-num">02</span>
+                <span className="intro-phone-label">
+                  Trade, long, short, leverage
+                  <small>SOL collateral, 2x to 10x, batched fills with preview.</small>
+                </span>
+                <span className="intro-phone-dot" />
+              </button>
             </div>
           </div>
 
-          {/* Tagline */}
-          <div style={{
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11, letterSpacing: "0.18em",
-            color: "rgba(7,26,10,0.5)", textTransform: "uppercase",
-            whiteSpace: "nowrap",
-            opacity: 0,
-            ...(taglineShow ? { animation: "fadeUp 0.7s ease forwards" } : {}),
-          }}>
-            One Transaction &middot; Three Protocols &middot; All or Nothing
+          <div className="intro-phone-stage">
+            <canvas ref={phoneCanvasRef} className="intro-phone-canvas" />
+            <div className="intro-phone-glow" aria-hidden="true" />
           </div>
 
-          {/* Enter button */}
-          <div style={{
-            marginTop: 38, opacity: 0,
-            ...(btnShow ? { animation: "fadeUp 0.7s ease 0.35s forwards" } : {}),
-          }}>
-            <button id="enter-btn" onClick={onEnter} style={{
-              display: "inline-block", padding: "14px 42px",
-              background: "#071a0a", color: "#00FF57",
-              fontSize: 13, fontWeight: 900,
-              letterSpacing: "0.12em", textTransform: "uppercase",
-              textDecoration: "none", borderRadius: 3,
-              border: "none", cursor: "pointer",
-              fontFamily: "'Inter', sans-serif",
-              transition: "transform 0.2s, box-shadow 0.2s",
-            }}
-            onMouseEnter={e => {
-              (e.currentTarget).style.transform = "translateY(-2px)";
-              (e.currentTarget).style.boxShadow = "0 10px 36px rgba(7,26,10,0.25)";
-            }}
-            onMouseLeave={e => {
-              (e.currentTarget).style.transform = "translateY(0)";
-              (e.currentTarget).style.boxShadow = "none";
-            }}
-            >Enter Terminal &rarr;</button>
+          <div ref={phoneIndicatorRef} className="intro-phone-indicator" aria-label="Mobile screen selector">
+            <button className="active" data-i="0" aria-label="Screen 1" />
+            <button data-i="1" aria-label="Screen 2" />
+          </div>
+
+          <div className="intro-phone-caption" aria-hidden="true">
+            <span className="intro-caption-bar" />
+            <span ref={phoneCaptionRef}>01 / 02 · Home</span>
+            <span className="intro-caption-bar" />
           </div>
         </div>
-      </div>
-
-      {/* Animation canvas (on top) */}
-      <canvas ref={canvasRef} style={{ position: "fixed", inset: 0, zIndex: 10, display: "block" }} />
-
-      {/* Skip button */}
-      <div id="skip" onClick={skipToEnd} style={{
-        position: "fixed", top: 18, right: 20, zIndex: 100,
-        fontSize: 11, cursor: "pointer", letterSpacing: "0.1em", textTransform: "uppercase",
-        transition: "color 0.2s",
-        color: skipDark ? "rgba(7,26,10,0.3)" : "rgba(255,255,255,0.22)",
-      }}>&nbsp;</div>
-    </div>
+      </section>
+    </main>
   );
 }
