@@ -11,6 +11,7 @@ export interface PositionView {
   perpSide: number;
   perpSize: string;
   entryPrice: string;
+  openedAt: string;
   /** Power parameter: 0|1000=standard, 2000=squeeth. Formerly hedgeAmount. */
   powerMilli: number;
   collateralEntryPrice: string;

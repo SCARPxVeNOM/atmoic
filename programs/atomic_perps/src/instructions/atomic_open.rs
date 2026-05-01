@@ -152,13 +152,27 @@ pub fn process(
 
     // -------- 2. Oracle --------
     let clock = Clock::get()?;
-    let (sol_price_6dp, _conf) = validate_and_get_price(pyth_price_feed, &clock)?;
+    let (market_price_6dp, _conf) = validate_and_get_price(pyth_price_feed, &clock)?;
+
+    // For non-SOL markets, we need the SOL price separately for:
+    //   - SOL collateral valuation (SOL != BTC/ETH)
+    //   - mSOL sanity check (mSOL ≈ SOL, not BTC/ETH)
+    let is_sol_market = *pyth_price_feed.key == PYTH_SOL_FEED;
+    let sol_price_6dp = if is_sol_market {
+        market_price_6dp
+    } else {
+        // Non-SOL market: SOL oracle is required as additional account (index 10)
+        let sol_oracle = next_account_info(iter)?;
+        ensure!(*sol_oracle.key == PYTH_SOL_FEED, AtomicPerpsError::InvalidOracleFeed);
+        let (p, _) = validate_and_get_price(sol_oracle, &clock)?;
+        p
+    };
 
     // Get collateral price (may differ from SOL for JLP/mSOL)
     let collateral_price_6dp = match params.collateral_type {
-        0 => sol_price_6dp,
+        0 => sol_price_6dp,  // SOL collateral always valued at SOL price
         1 => {
-            validate_jlp_price(params.collateral_price_6dp, sol_price_6dp)?;
+            validate_jlp_price(params.collateral_price_6dp)?;
             params.collateral_price_6dp
         }
         2 => {
@@ -262,7 +276,7 @@ pub fn process(
         borrow_amount_usdc: notional_usd,  // REPURPOSED: stores notional size in USD 6dp
         perp_side: params.perp_side,
         perp_size: notional_usd,
-        entry_price: sol_price_6dp,
+        entry_price: market_price_6dp,
         opened_at: now,
         power_milli: power,
         collateral_entry_price: collateral_price_6dp,

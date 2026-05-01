@@ -129,10 +129,11 @@ pub const CORRELATED_CAP_BPS: u64 = 10_000; // 100% — permissive for bootstrap
 // === JLP Risk Parameters ===
 
 pub const JLP_LIQUIDATION_GRACE_SECONDS: i64 = 7_200; // 2 hours
-// Tightened from 5x to 2x: JLP ~$3-5 with SOL ~$150, so [SOL/2, SOL*2] = [$75, $300]
-// Previous 5x bounds allowed inflating collateral value by up to 5x
-pub const JLP_PRICE_SANITY_FACTOR: u64 = 2;
-// mSOL trades at ~1.05-1.15x SOL — tightened sanity window
+// JLP is a Jupiter pool token (~$3-5), NOT correlated to SOL price (~$150).
+// Absolute USD bounds prevent manipulation without false-rejecting real prices.
+pub const JLP_MIN_PRICE_6DP: u64 = 100_000;         // $0.10 floor
+pub const JLP_MAX_PRICE_6DP: u64 = 10_000_000_000;  // $10,000 ceiling
+// mSOL trades at ~1.05-1.15x SOL — factor of 2 gives [SOL/2, SOL*2]
 pub const MSOL_PRICE_SANITY_FACTOR: u64 = 2;
 
 // === Risk Parameters (must match qedspec constants) ===

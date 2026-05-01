@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { VersionedTransaction } from "@solana/web3.js";
 import { PositionView } from "../hooks/usePosition";
+import { TradeRecord } from "../hooks/useTradeHistory";
 import { API_BASE } from "../config";
 
 // Map Pyth feed pubkeys to market symbols
@@ -17,11 +18,29 @@ const FEED_TO_PRICE_KEY: Record<string, string> = {
   "42amVS4KgzR9rA28tkVYqVXjq9Qa8dcZQMbH5EYFX6XC": "eth",
 };
 
-// JLP has 6 decimals, SOL/mSOL have 9
 const JLP_MINT = "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4";
+const MSOL_MINT = "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So";
 
-function getCollateralDecimals(collateralMint: string): number {
-  return collateralMint === JLP_MINT ? 6 : 9;
+const HAIRCUTS: Record<string, number> = {
+  [JLP_MINT]: 0.25,
+  [MSOL_MINT]: 0.18,
+};
+const MAINT_MARGIN = 0.05; // 5%
+
+function getCollateralDecimals(mint: string): number {
+  return mint === JLP_MINT ? 6 : 9;
+}
+
+function getCollateralLabel(mint: string): string {
+  if (mint === JLP_MINT) return "JLP";
+  if (mint === MSOL_MINT) return "mSOL";
+  return "SOL";
+}
+
+function getCollateralColor(mint: string): string {
+  if (mint === JLP_MINT) return "#f59e0b";
+  if (mint === MSOL_MINT) return "#06b6d4";
+  return "#3fb68b";
 }
 
 type DeleverageZone = "safe" | "zone1" | "zone2" | "zone3" | "full";
@@ -43,10 +62,17 @@ interface DisplayPosition {
   deleverageZone: DeleverageZone;
   deleverageBadge: string;
   deleverageBadgeCol: string;
+  collateralLabel: string;
+  collateralColor: string;
+  collateralTokens: number;
+  collateralPrice: number;
+  liqPrice: number;
+  openedAt: number;
 }
 
 function toDisplay(p: PositionView, prices: Record<string, number>, fallbackPrice: number): DisplayPosition {
-  const decimals = getCollateralDecimals(p.collateralMint || "");
+  const collMint = p.collateralMint || "";
+  const decimals = getCollateralDecimals(collMint);
   const collNative = Number(p.collateralAmount) / Math.pow(10, decimals);
   const notionalUsd = Number(p.borrowAmountUsdc) / 1e6;
   const entry = Number(p.entryPrice) / 1e6;
@@ -57,18 +83,24 @@ function toDisplay(p: PositionView, prices: Record<string, number>, fallbackPric
   const marketSymbol = FEED_TO_MARKET[p.perpMarket] || "SOL-PERP";
   const marketLabel = marketSymbol.replace("-PERP", "-USD");
 
-  // For margin calculation, we need collateral value in USD
-  // Collateral is always denominated in SOL (for SOL collateral), so use SOL price
-  const solPrice = prices["sol"] || fallbackPrice;
-  const margin = collNative * solPrice;
-  const lv = margin > 0 ? Math.round(notionalUsd / margin) : 1;
+  // Use correct collateral price based on collateral type
+  // For SOL: use live SOL price. For JLP/mSOL: use entry price (best available).
+  let collateralPrice: number;
+  if (collMint === JLP_MINT || collMint === MSOL_MINT) {
+    collateralPrice = Number(p.collateralEntryPrice) / 1e6;
+  } else {
+    collateralPrice = prices["sol"] || fallbackPrice;
+  }
+
+  const haircut = HAIRCUTS[collMint] || 0;
+  const margin = collNative * collateralPrice * (1 - haircut);
+  const lv = margin > 0 ? Math.round(notionalUsd / margin * 10) / 10 : 0;
 
   // Power-aware PnL
   const power = p.powerMilli || 0;
   const isPower = power === 2000;
   let pnlRaw: number;
   if (isPower && entry > 0) {
-    // Squeeth: pnl = (exit² - entry²) / entry² * size
     const exitSq = markPrice * markPrice;
     const entrySq = entry * entry;
     const delta = (exitSq - entrySq) / entrySq;
@@ -83,6 +115,17 @@ function toDisplay(p: PositionView, prices: Record<string, number>, fallbackPric
   const marginRatio = notionalUsd > 0 ? margin / notionalUsd : 99;
   const marginPct = marginRatio * 100;
   const marginCol = marginPct > 15 ? "#3fb68b" : marginPct > 8 ? "#d29922" : "#ff5353";
+
+  // Liquidation price estimate
+  let liqPrice = 0;
+  if (entry > 0 && notionalUsd > 0) {
+    if (side === "Long") {
+      liqPrice = entry * (1 + MAINT_MARGIN - marginRatio);
+    } else {
+      liqPrice = entry * (1 - MAINT_MARGIN + marginRatio);
+    }
+    if (liqPrice < 0) liqPrice = 0;
+  }
 
   // Deleverage zone classification
   const dlZone: DeleverageZone =
@@ -112,7 +155,28 @@ function toDisplay(p: PositionView, prices: Record<string, number>, fallbackPric
     deleverageZone: dlZone,
     deleverageBadge: dlBadge,
     deleverageBadgeCol: dlColor,
+    collateralLabel: getCollateralLabel(collMint),
+    collateralColor: getCollateralColor(collMint),
+    collateralTokens: collNative,
+    collateralPrice,
+    liqPrice,
+    openedAt: Number(p.openedAt || 0),
   };
+}
+
+function fmtPrice(v: number): string {
+  if (v >= 10000) return "$" + v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (v >= 1) return "$" + v.toFixed(2);
+  return "$" + v.toFixed(4);
+}
+
+function timeAgo(ts: number): string {
+  if (ts <= 0) return "-";
+  const diff = Math.floor(Date.now() / 1000 - ts);
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
 }
 
 export function PositionsTable({
@@ -120,11 +184,13 @@ export function PositionsTable({
   positions: rawPositions,
   prices,
   solPrice,
+  tradeHistory,
 }: {
   accentColor: string;
   positions?: PositionView[];
   prices?: Record<string, number>;
   solPrice?: number;
+  tradeHistory?: TradeRecord[];
 }) {
   const [tab, setTab] = useState("positions");
   const [busy, setBusy] = useState<string | null>(null);
@@ -190,9 +256,12 @@ export function PositionsTable({
     }
   };
 
+  const COLS = ["Market", "Side", "Lv", "Size", "Collateral", "Entry", "Mark", "Liq Price", "PnL", "Margin %", ""];
+  const rightAligned = ["Size", "Collateral", "Entry", "Mark", "Liq Price", "PnL"];
+
   return (
     <div style={{
-      height: 220, flexShrink: 0,
+      height: 240, flexShrink: 0,
       borderTop: "1px solid #30363d", background: "#0d1117",
       display: "flex", flexDirection: "column",
     }}>
@@ -227,10 +296,10 @@ export function PositionsTable({
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
                 <tr>
-                  {["Market", "Side", "Lv", "Size", "Margin", "Entry", "Mark", "PnL", "Margin %", ""].map(h => (
+                  {COLS.map(h => (
                     <th key={h} style={{
-                      padding: "5px 12px", color: "#8b949e", fontWeight: 400,
-                      textAlign: ["Size", "Margin", "Entry", "Mark", "PnL"].includes(h) ? "right" : "left",
+                      padding: "5px 10px", color: "#8b949e", fontWeight: 400,
+                      textAlign: rightAligned.includes(h) ? "right" : "left",
                       whiteSpace: "nowrap", position: "sticky", top: 0, background: "#0d1117",
                       borderBottom: "1px solid #21262d",
                     }}>{h}</th>
@@ -240,37 +309,72 @@ export function PositionsTable({
               <tbody>
                 {displayPositions.map((p, i) => (
                   <tr key={i} style={{ borderBottom: "1px solid #161b22" }}>
-                    <td style={{ padding: "8px 12px", color: "#e6edf3", fontWeight: 600 }}>
-                      {p.market}
-                      {p.isPower && <span style={{ marginLeft: 4, fontSize: 10, color: "#a78bfa", background: "#1a0a2e", padding: "1px 4px", borderRadius: 3 }}>{"\u00B2"}</span>}
+                    {/* Market + badges */}
+                    <td style={{ padding: "6px 10px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <span style={{ color: "#e6edf3", fontWeight: 600 }}>{p.market}</span>
+                        {p.isPower && <span style={{ fontSize: 9, color: "#a78bfa", background: "#1a0a2e", padding: "1px 4px", borderRadius: 3, fontWeight: 700 }}>{"\u00B2"}</span>}
+                        <span style={{ fontSize: 9, color: p.collateralColor, background: `${p.collateralColor}18`, padding: "1px 4px", borderRadius: 3, fontWeight: 600 }}>{p.collateralLabel}</span>
+                      </div>
+                      <div style={{ fontSize: 10, color: "#484f58", marginTop: 1 }}>{timeAgo(p.openedAt)}</div>
                     </td>
-                    <td style={{ padding: "8px 12px" }}>
+
+                    {/* Side */}
+                    <td style={{ padding: "6px 10px" }}>
                       <span style={{
                         color: p.side === "Long" ? "#3fb68b" : "#ff5353",
-                        fontWeight: 700, display: "flex", alignItems: "center", gap: 4,
+                        fontWeight: 700, display: "flex", alignItems: "center", gap: 3,
                       }}>
-                        <span style={{ fontSize: 14 }}>{p.side === "Long" ? "\u2191" : "\u2193"}</span>
+                        <span style={{ fontSize: 13 }}>{p.side === "Long" ? "\u2191" : "\u2193"}</span>
                         {p.side}
                       </span>
                     </td>
-                    <td style={{ padding: "8px 12px", fontFamily: "IBM Plex Mono,monospace", color: "#8b949e" }}>{p.lv}x</td>
-                    <td style={{ padding: "8px 12px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace" }}>
-                      <div style={{ color: "#e6edf3" }}>${p.sizeUsd.toFixed(2)}</div>
+
+                    {/* Leverage */}
+                    <td style={{ padding: "6px 10px", fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3", fontWeight: 600 }}>
+                      {p.lv > 0 ? `${p.lv}x` : "-"}
                     </td>
-                    <td style={{ padding: "8px 12px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#8b949e" }}>
-                      ${p.margin.toFixed(2)}
+
+                    {/* Size (notional) */}
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>
+                      {fmtPrice(p.sizeUsd)}
                     </td>
-                    <td style={{ padding: "8px 12px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>${p.entry.toFixed(2)}</td>
-                    <td style={{ padding: "8px 12px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>${p.mark.toFixed(2)}</td>
-                    <td style={{ padding: "8px 12px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace" }}>
+
+                    {/* Collateral */}
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace" }}>
+                      <div style={{ color: "#e6edf3" }}>{fmtPrice(p.margin / (1 - (HAIRCUTS[getCollateralMintFromLabel(p.collateralLabel)] || 0)))}</div>
+                      <div style={{ fontSize: 10, color: "#484f58" }}>
+                        {p.collateralTokens.toFixed(p.collateralLabel === "JLP" ? 4 : 6)} {p.collateralLabel}
+                      </div>
+                    </td>
+
+                    {/* Entry */}
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>
+                      {fmtPrice(p.entry)}
+                    </td>
+
+                    {/* Mark */}
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>
+                      {fmtPrice(p.mark)}
+                    </td>
+
+                    {/* Liq Price */}
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace" }}>
+                      <span style={{ color: "#ff5353" }}>{p.liqPrice > 0 ? fmtPrice(p.liqPrice) : "-"}</span>
+                    </td>
+
+                    {/* PnL */}
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace" }}>
                       <div style={{ color: p.pnl >= 0 ? "#3fb68b" : "#ff5353", fontWeight: 600 }}>
-                        {p.pnl >= 0 ? "+" : ""}${p.pnl.toFixed(2)}
+                        {p.pnl >= 0 ? "+" : ""}{fmtPrice(Math.abs(p.pnl))}
                       </div>
                       <div style={{ fontSize: 10, color: p.pnl >= 0 ? "#3fb68b" : "#ff5353" }}>
                         {p.pnlPct >= 0 ? "+" : ""}{p.pnlPct.toFixed(2)}%
                       </div>
                     </td>
-                    <td style={{ padding: "8px 12px" }}>
+
+                    {/* Margin % + Deleverage zone */}
+                    <td style={{ padding: "6px 10px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                         <span style={{ fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: p.marginCol }}>
                           {(p.marginRatio * 100).toFixed(1)}%
@@ -282,7 +386,9 @@ export function PositionsTable({
                         }}>{p.deleverageBadge}</span>
                       </div>
                     </td>
-                    <td style={{ padding: "8px 12px" }}>
+
+                    {/* Close controls */}
+                    <td style={{ padding: "6px 10px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <div style={{ display: "flex", gap: 2 }}>
                           {[25, 50, 100].map(pct => (
@@ -328,12 +434,109 @@ export function PositionsTable({
               No open positions
             </div>
           )
+        ) : tab === "history" ? (
+          <TradeHistoryTab trades={tradeHistory || []} />
         ) : (
-          <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#8b949e", fontSize: 13 }}>
-            No {tab === "orders" ? "open orders" : "trade history"}
-          </div>
+          <OrdersTab />
         )}
       </div>
     </div>
   );
+}
+
+function TradeHistoryTab({ trades }: { trades: TradeRecord[] }) {
+  if (trades.length === 0) {
+    return (
+      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#8b949e", fontSize: 13 }}>
+        No trade history yet. Close a position to see it here.
+      </div>
+    );
+  }
+  const totalPnl = trades.reduce((s, t) => s + t.pnl, 0);
+  const wins = trades.filter(t => t.pnl > 0).length;
+  return (
+    <div>
+      {/* Summary bar */}
+      <div style={{ display: "flex", gap: 20, padding: "6px 12px", borderBottom: "1px solid #161b22", fontSize: 11, color: "#8b949e" }}>
+        <span>Trades: <b style={{ color: "#e6edf3" }}>{trades.length}</b></span>
+        <span>Wins: <b style={{ color: "#3fb68b" }}>{wins}</b></span>
+        <span>Losses: <b style={{ color: "#ff5353" }}>{trades.length - wins}</b></span>
+        <span>Win Rate: <b style={{ color: wins / trades.length > 0.5 ? "#3fb68b" : "#ff5353" }}>{(wins / trades.length * 100).toFixed(0)}%</b></span>
+        <span>Total PnL: <b style={{ color: totalPnl >= 0 ? "#3fb68b" : "#ff5353" }}>{totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(2)}</b></span>
+      </div>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+        <thead>
+          <tr>
+            {["Market", "Side", "Collateral", "Size", "Entry", "Exit", "PnL", "Close %", "Time"].map(h => (
+              <th key={h} style={{
+                padding: "5px 10px", color: "#8b949e", fontWeight: 400,
+                textAlign: ["Size", "Entry", "Exit", "PnL"].includes(h) ? "right" : "left",
+                whiteSpace: "nowrap", position: "sticky", top: 0, background: "#0d1117",
+                borderBottom: "1px solid #21262d",
+              }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {trades.map((t, i) => (
+            <tr key={i} style={{ borderBottom: "1px solid #161b22" }}>
+              <td style={{ padding: "6px 10px", color: "#e6edf3", fontWeight: 600 }}>
+                {t.market.replace("-PERP", "-USD")}
+              </td>
+              <td style={{ padding: "6px 10px" }}>
+                <span style={{ color: t.side === "Long" ? "#3fb68b" : "#ff5353", fontWeight: 700 }}>
+                  {t.side === "Long" ? "\u2191" : "\u2193"} {t.side}
+                </span>
+              </td>
+              <td style={{ padding: "6px 10px" }}>
+                <span style={{
+                  fontSize: 10, fontWeight: 600, padding: "1px 5px", borderRadius: 3,
+                  color: t.collateralType === "JLP" ? "#f59e0b" : t.collateralType === "mSOL" ? "#06b6d4" : "#3fb68b",
+                  background: t.collateralType === "JLP" ? "#f59e0b18" : t.collateralType === "mSOL" ? "#06b6d418" : "#3fb68b18",
+                }}>{t.collateralType}</span>
+              </td>
+              <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>
+                ${t.size.toFixed(2)}
+              </td>
+              <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#8b949e" }}>
+                ${t.entryPrice >= 1000 ? t.entryPrice.toFixed(2) : t.entryPrice.toFixed(4)}
+              </td>
+              <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>
+                ${t.exitPrice >= 1000 ? t.exitPrice.toFixed(2) : t.exitPrice.toFixed(4)}
+              </td>
+              <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace" }}>
+                <span style={{ color: t.pnl >= 0 ? "#3fb68b" : "#ff5353", fontWeight: 600 }}>
+                  {t.pnl >= 0 ? "+" : ""}${t.pnl.toFixed(4)}
+                </span>
+              </td>
+              <td style={{ padding: "6px 10px", fontFamily: "IBM Plex Mono,monospace", color: "#8b949e" }}>
+                {t.closeBps >= 10000 ? "Full" : `${t.closeBps / 100}%`}
+              </td>
+              <td style={{ padding: "6px 10px", color: "#484f58", fontSize: 11 }}>
+                {timeAgo(t.closedAt)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function OrdersTab() {
+  return (
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#8b949e", fontSize: 13, gap: 8 }}>
+      <div style={{ fontSize: 20 }}>{"\u{1F4CB}"}</div>
+      <div>No open orders</div>
+      <div style={{ fontSize: 11, color: "#484f58", maxWidth: 300, textAlign: "center" }}>
+        Limit orders via DFBA (Discrete Frequent Batch Auction) will appear here. Use the DFBA tab to place batch orders.
+      </div>
+    </div>
+  );
+}
+
+function getCollateralMintFromLabel(label: string): string {
+  if (label === "JLP") return JLP_MINT;
+  if (label === "mSOL") return MSOL_MINT;
+  return "";
 }

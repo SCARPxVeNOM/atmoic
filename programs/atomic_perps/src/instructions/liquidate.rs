@@ -102,15 +102,26 @@ pub fn process(
     let clock = Clock::get()?;
     let (current_price, _conf) = validate_and_get_price(pyth_price_feed, &clock)?;
 
+    // For non-SOL markets, get SOL price from optional extra account
+    let is_sol_market = *pyth_price_feed.key == PYTH_SOL_FEED;
+    let sol_price = if is_sol_market {
+        current_price
+    } else {
+        let sol_oracle = next_account_info(iter)?;
+        ensure!(*sol_oracle.key == PYTH_SOL_FEED, AtomicPerpsError::InvalidOracleFeed);
+        let (p, _) = validate_and_get_price(sol_oracle, &clock)?;
+        p
+    };
+
     // Get collateral price
     let collateral_price = if coll_mint == config.jlp_mint {
-        validate_jlp_price(params.collateral_price_6dp, current_price)?;
+        validate_jlp_price(params.collateral_price_6dp)?;
         params.collateral_price_6dp
     } else if coll_mint == config.msol_mint {
-        crate::utils::oracle::validate_msol_price(params.collateral_price_6dp, current_price)?;
+        crate::utils::oracle::validate_msol_price(params.collateral_price_6dp, sol_price)?;
         params.collateral_price_6dp
     } else {
-        current_price
+        sol_price  // SOL collateral valued at SOL price, not market price
     };
 
     // -------- JLP grace period: cannot liquidate within 2h of opening --------
