@@ -866,7 +866,19 @@ html.intro-active #root {
   align-items: center;
 }
 
-.intro-root .c-vault .grid-2 .col-vault { display: grid; place-items: center; }
+.intro-root .c-vault .grid-2 .col-vault { display: grid; place-items: stretch; }
+
+.intro-root .vault-scene {
+  position: relative;
+  width: 100%;
+  height: 720px;
+}
+
+.intro-root .vault-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
 
 /* Chapter 04 — Proofs */
 .intro-root .proofs-grid {

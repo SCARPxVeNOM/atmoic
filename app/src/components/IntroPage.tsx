@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, FC } from "react";
 import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { VaultScene } from "./VaultScene";
 import "./IntroPage.css";
 
 const asset = (name: string) => `${import.meta.env.BASE_URL}assets/${name}`;
@@ -479,13 +480,7 @@ export const IntroPage: FC<IntroPageProps> = ({ onEnter }) => {
               </div>
 
               <div className="col-vault fade-up d3">
-                <div className="vault-emblem">
-                  <span className="vault-emblem-tick t-top">— Yield —</span>
-                  <span className="vault-emblem-tick t-bot">— Self-repaying —</span>
-                  <span className="vault-emblem-tick t-l">JLP · mSOL · SOL</span>
-                  <span className="vault-emblem-tick t-r">Funding · offset</span>
-                  <span className="vault-emblem-inner">∮ yield</span>
-                </div>
+                <VaultScene />
               </div>
             </div>
           </div>
