@@ -3,6 +3,8 @@ import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { VersionedTransaction } from "@solana/web3.js";
 import { useBatchQueue } from "../hooks/useBatchQueue";
 import { API_BASE } from "../config";
+import { useToast, Spinner } from "./Toast";
+import { classifyError } from "../lib/errors";
 
 const CAP = 0.003;
 
@@ -59,8 +61,8 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
   const [price, setPrice] = useState("");
   const [size, setSize] = useState("500");
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
   const accent = accentColor || "#58a6ff";
+  const toast = useToast();
   const { publicKey, signTransaction } = useWallet();
   const { connection } = useConnection();
   const batchQueue = useBatchQueue();
@@ -110,7 +112,6 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
   const placeOrder = async () => {
     if (!publicKey || !price || !size) return;
     setBusy(true);
-    setStatus(null);
     try {
       const sig = await sendTx("/build-tx/place-order", {
         wallet: publicKey.toBase58(),
@@ -119,9 +120,10 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
         side: orderSide === "BID" ? "Long" : "Short",
         market: "SOL-PERP",
       });
-      setStatus(`Order placed: ${sig.slice(0, 8)}...`);
+      toast.success("Order Placed", `${orderSide} · ${sig.slice(0, 8)}…`);
     } catch (e: any) {
-      setStatus(e.message ?? String(e));
+      const err = classifyError(e);
+      toast.error(err.title, err.message);
     } finally {
       setBusy(false);
     }
@@ -130,15 +132,15 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
   const cancelOrder = async () => {
     if (!publicKey) return;
     setBusy(true);
-    setStatus(null);
     try {
       const sig = await sendTx("/build-tx/cancel-order", {
         wallet: publicKey.toBase58(),
         market: "SOL-PERP",
       });
-      setStatus(`Order cancelled: ${sig.slice(0, 8)}...`);
+      toast.success("Order Cancelled", sig.slice(0, 8) + "…");
     } catch (e: any) {
-      setStatus(e.message ?? String(e));
+      const err = classifyError(e);
+      toast.error(err.title, err.message);
     } finally {
       setBusy(false);
     }
@@ -260,11 +262,15 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
               color: !publicKey || busy ? "#8b949e" : "#fff",
               fontSize: 13, fontWeight: 700,
               cursor: !publicKey || busy ? "not-allowed" : "pointer", whiteSpace: "nowrap",
-            }}>{busy ? "Submitting..." : "Place Order"}</button>
+            }}>
+            {busy
+              ? <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                  <Spinner size={12} color={!publicKey || busy ? "#8b8b94" : "#fff"} />
+                  Placing…
+                </span>
+              : "Place Order"}
+          </button>
         </div>
-        {status && (
-          <div style={{ marginTop: 10, fontSize: 11, color: "#8b949e" }}>{status}</div>
-        )}
       </div>
 
       {/* Bottom row */}
@@ -294,7 +300,9 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
                   border: "1px solid #1a1a1f", borderRadius: 0,
                   color: "#ff5353", fontSize: 11,
                   cursor: busy ? "not-allowed" : "pointer",
-                }}>Cancel All</button>
+                }}>
+                {busy ? <Spinner size={11} color="#ff5353" /> : "Cancel All"}
+              </button>
             </div>
           ) : (
             <div style={{ fontSize: 12, color: "#8b949e" }}>Connect wallet to view orders</div>

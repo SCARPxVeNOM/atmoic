@@ -4,6 +4,8 @@ import { VersionedTransaction } from "@solana/web3.js";
 import { PositionView } from "../hooks/usePosition";
 import { TradeRecord } from "../hooks/useTradeHistory";
 import { API_BASE } from "../config";
+import { useToast, Spinner } from "./Toast";
+import { classifyError } from "../lib/errors";
 
 // Map Pyth feed pubkeys to market symbols
 const FEED_TO_MARKET: Record<string, string> = {
@@ -194,8 +196,8 @@ export function PositionsTable({
 }) {
   const [tab, setTab] = useState("positions");
   const [busy, setBusy] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
   const [closePercent, setClosePercent] = useState(100);
+  const toast = useToast();
   const accent = accentColor || "#58a6ff";
   const { publicKey, signTransaction, signAllTransactions } = useWallet();
   const { connection } = useConnection();
@@ -216,7 +218,6 @@ export function PositionsTable({
   const closePosition = async (marketSymbol: string) => {
     if (!publicKey || !signTransaction) return;
     setBusy(marketSymbol);
-    setStatus(null);
     try {
       const closeBps = Math.round(closePercent * 100);
       const res = await fetch(`${API_BASE}/build-tx/close`, {
@@ -247,10 +248,11 @@ export function PositionsTable({
         await connection.confirmTransaction(sig, "confirmed");
         lastSig = sig;
       }
-      const label = closePercent < 100 ? `Closed ${closePercent}%` : "Closed";
-      setStatus(`${label}: ${lastSig.slice(0, 8)}...`);
+      const label = closePercent < 100 ? `${closePercent}% closed` : "Position closed";
+      toast.success(label, `${marketSymbol} · ${lastSig.slice(0, 8)}…`);
     } catch (e: any) {
-      setStatus(e.message ?? String(e));
+      const err = classifyError(e);
+      toast.error(err.title, err.message);
     } finally {
       setBusy(null);
     }
@@ -283,9 +285,6 @@ export function PositionsTable({
             color: totalPnl >= 0 ? "#3fb68b" : "#ff5353",
             fontWeight: 600, marginLeft: 4,
           }}>{totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(2)}</span>
-          {status && (
-            <span style={{ marginLeft: 12, fontSize: 10, color: "#8b949e" }}>{status}</span>
-          )}
         </div>
       </div>
 
@@ -394,7 +393,7 @@ export function PositionsTable({
                           {[25, 50, 100].map(pct => (
                             <button key={pct} onClick={() => setClosePercent(pct)} style={{
                               padding: "2px 5px", borderRadius: 3, fontSize: 9,
-                              border: `1px solid ${closePercent === pct ? "#ff5353" : "#30363d"}`,
+                              border: `1px solid ${closePercent === pct ? "#ff5353" : "#1a1a1f"}`,
                               background: closePercent === pct ? "#ff535318" : "transparent",
                               color: closePercent === pct ? "#ff5353" : "#8b949e",
                               cursor: "pointer",
@@ -419,10 +418,14 @@ export function PositionsTable({
                           onMouseLeave={e => {
                             const t = e.currentTarget;
                             t.style.background = "transparent";
-                            t.style.borderColor = "#30363d";
+                            t.style.borderColor = "#1a1a1f";
                             t.style.color = "#ffffff";
                           }}
-                        >{busy === p.marketSymbol ? "Closing..." : closePercent < 100 ? `Close ${closePercent}%` : "Close"}</button>
+                        >
+                          {busy === p.marketSymbol
+                            ? <Spinner size={11} color="#8b8b94" />
+                            : closePercent < 100 ? `Close ${closePercent}%` : "Close"}
+                        </button>
                       </div>
                     </td>
                   </tr>

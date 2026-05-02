@@ -3,6 +3,8 @@ import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { VersionedTransaction } from "@solana/web3.js";
 import { API_BASE } from "../config";
 import { usePrivySession } from "../hooks/usePrivySession";
+import { useToast, Spinner } from "./Toast";
+import { classifyError } from "../lib/errors";
 
 const COLLATERAL = [
   { id: "SOL",  label: "SOL",  cut: 0  },
@@ -90,8 +92,8 @@ export function TradePanel({
   const [leverage, setLeverage] = useState(5);
   const [powerMode, setPowerMode] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
   const [confirmDesc, setConfirmDesc] = useState<string | null>(null);
+  const toast = useToast();
   const [optimistic, setOptimistic] = useState<{ side: string; value: number } | null>(null);
   const [vaultRisk, setVaultRisk] = useState<VaultRisk | null>(null);
 
@@ -221,7 +223,6 @@ export function TradePanel({
     if (!publicKey) return;
     setConfirmDesc(null);
     setBusy(true);
-    setStatus(null);
     setOptimistic({ side, value: summary.notional });
     try {
       const decimals = col === "JLP" ? 6 : 9;
@@ -235,10 +236,11 @@ export function TradePanel({
         market: perpMarket,
         power: powerMode ? 2000 : 1000,
       });
-      setStatus(`Opened: ${sig.slice(0, 8)}…`);
+      toast.success("Position Opened", `${side} ${perpMarket} · ${sig.slice(0, 8)}…`);
       setOptimistic(null);
     } catch (e: any) {
-      setStatus(e.message ?? String(e));
+      const err = classifyError(e);
+      toast.error(err.title, err.message);
       setOptimistic(null);
     } finally {
       setBusy(false);
@@ -544,7 +546,12 @@ export function TradePanel({
                 letterSpacing: 0.4, textTransform: "uppercase",
                 transition: "opacity 0.15s",
               }}>
-              {busy ? "Submitting…" : `${side === "Long" ? "Buy" : "Sell"} ${perpMarket}`}
+              {busy
+                ? <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                    <Spinner size={13} color={btnDisabled ? C.t3 : "#000"} />
+                    Confirming…
+                  </span>
+                : `${side === "Long" ? "Buy" : "Sell"} ${perpMarket}`}
             </button>
             <div style={{ textAlign: "center", fontSize: 10.5, color: C.t3, marginTop: -6, lineHeight: 1.5 }}>
               {!publicKey ? "Connect wallet to trade" : "Perpetual futures · settles on close"}
@@ -552,14 +559,6 @@ export function TradePanel({
           </>
         )}
 
-        {/* Status */}
-        {status && (
-          <div style={{
-            textAlign: "center", fontSize: 11, color: C.t2,
-            padding: "8px 10px", background: C.panel2, border: `1px solid ${C.border}`,
-            borderRadius: 4, fontFamily: MONO,
-          }}>{status}</div>
-        )}
 
         {/* Subtle gap reference visualization for sideBg (kept since logic-equivalent) */}
         <div style={{ display: "none", background: sideBg }} />

@@ -4,6 +4,8 @@ import { VersionedTransaction } from "@solana/web3.js";
 import { PositionView } from "../hooks/usePosition";
 import { API_BASE } from "../config";
 import { describeTransaction } from "../lib/tx-description";
+import { useToast, Spinner } from "./Toast";
+import { classifyError } from "../lib/errors";
 
 const MARKETS = [
   { symbol: "SOL-PERP", label: "SOL", priceKey: "sol" },
@@ -48,8 +50,8 @@ export const SimplePanel: FC<{
   const [market, setMarket] = useState("SOL-PERP");
   const [powerMode, setPowerMode] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ side: "Long" | "Short"; desc: string } | null>(null);
+  const toast = useToast();
   const [optimistic, setOptimistic] = useState<{ side: string; value: number } | null>(null);
 
   const marketInfo = MARKETS.find(m => m.symbol === market) || MARKETS[0];
@@ -99,7 +101,6 @@ export const SimplePanel: FC<{
     const { side } = confirm;
     setConfirm(null);
     setBusy(true);
-    setStatus(null);
     setOptimistic({ side, value: estValue });
     try {
       const lamports = BigInt(Math.floor(Number(amount) * 1e9));
@@ -114,10 +115,11 @@ export const SimplePanel: FC<{
         market,
         power: powerMode ? 2000 : 1000,
       });
-      setStatus("Position opened");
+      toast.success("Position Opened", `${side} ${marketInfo.label} · ${leverage}x`);
       setOptimistic(null);
     } catch (e: any) {
-      setStatus(e.message ?? String(e));
+      const err = classifyError(e);
+      toast.error(err.title, err.message);
       setOptimistic(null);
     } finally {
       setBusy(false);
@@ -127,12 +129,12 @@ export const SimplePanel: FC<{
   const close = async () => {
     if (!publicKey) return;
     setBusy(true);
-    setStatus(null);
     try {
       await sendTx("/build-tx/close", { wallet: publicKey.toBase58(), useKamino: false, market });
-      setStatus("Position closed");
+      toast.success("Position Closed", marketInfo.label);
     } catch (e: any) {
-      setStatus(e.message ?? String(e));
+      const err = classifyError(e);
+      toast.error(err.title, err.message);
     } finally {
       setBusy(false);
     }
@@ -233,7 +235,9 @@ export const SimplePanel: FC<{
             letterSpacing: "0.04em", textTransform: "uppercase",
             transition: "background 0.15s, border-color 0.15s",
           }}>
-            {busy ? "Closing…" : "Close Position"}
+            {busy
+              ? <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><Spinner size={12} color={C.neg} /> Closing…</span>
+              : "Close Position"}
           </button>
           {status && <div style={{ fontSize: 11, color: C.t2, textAlign: "center", fontFamily: MONO }}>{status}</div>}
         </div>
@@ -394,7 +398,7 @@ export const SimplePanel: FC<{
                 letterSpacing: "0.04em", textTransform: "uppercase", fontFamily: SANS,
                 transition: "opacity 0.15s",
               }}>
-              {busy ? "…" : `Long ${marketInfo.label}`}
+              {busy ? <Spinner size={13} color="#000" /> : `Long ${marketInfo.label}`}
             </button>
             <button
               onClick={() => requestOpen("Short")}
@@ -407,7 +411,7 @@ export const SimplePanel: FC<{
                 letterSpacing: "0.04em", textTransform: "uppercase", fontFamily: SANS,
                 transition: "opacity 0.15s",
               }}>
-              {busy ? "…" : `Short ${marketInfo.label}`}
+              {busy ? <Spinner size={13} color="#000" /> : `Short ${marketInfo.label}`}
             </button>
           </div>
         )}
@@ -416,9 +420,6 @@ export const SimplePanel: FC<{
           <div style={{ fontSize: 11, color: C.t3, textAlign: "center", letterSpacing: "0.04em" }}>
             Connect wallet to start
           </div>
-        )}
-        {status && (
-          <div style={{ fontSize: 11, color: C.t2, textAlign: "center", fontFamily: MONO }}>{status}</div>
         )}
       </div>
     </div>
