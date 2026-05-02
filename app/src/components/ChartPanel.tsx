@@ -153,11 +153,14 @@ export function ChartPanel({
 
     seriesRef.current.setData(data);
 
-    // Only fitContent when market/interval changed (not on refresh polls)
-    const newKey = `${activeMarket}_${interval}`;
+    // fitContent when market/interval changes (not on polling refreshes).
+    // Include a price-magnitude bucket in the key so that stale data from
+    // a previous market (e.g. SOL at ~83 when switching to BTC at ~78000)
+    // doesn't "consume" the key and block fitContent for the real data.
+    const priceBucket = Math.floor(Math.log10(Math.max(1, candles[0].close)));
+    const newKey = `${activeMarket}_${interval}_${priceBucket}`;
     if (loadedKeyRef.current !== newKey) {
       loadedKeyRef.current = newKey;
-      // Use requestAnimationFrame to ensure data is rendered before fitting
       requestAnimationFrame(() => {
         chartRef.current?.timeScale().fitContent();
       });

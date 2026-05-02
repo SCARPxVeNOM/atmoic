@@ -5,6 +5,8 @@ import { API_BASE } from "../config";
 import { usePrivySession } from "../hooks/usePrivySession";
 import { useToast, Spinner } from "./Toast";
 import { classifyError } from "../lib/errors";
+import { useYield } from "../hooks/useYield";
+import { useFundingRate } from "../hooks/useFundingRate";
 
 const COLLATERAL = [
   { id: "SOL",  label: "SOL",  cut: 0  },
@@ -104,6 +106,9 @@ export function TradePanel({
   const perpMarket = MARKET_TO_PERP[activeMarket || "SOL-USD"] || "SOL-PERP";
   const priceKey = MARKET_TO_KEY[activeMarket || "SOL-USD"] || "sol";
   const markPrice = prices?.[priceKey] || solPrice || 0;
+
+  const yieldInfo = useYield(col);
+  const funding = useFundingRate(priceKey);
   const solPriceVal = solPrice || 0;
   const sol = parseFloat(amount) || 0;
   const cut = COLLATERAL.find(c => c.id === col)?.cut || 0;
@@ -458,6 +463,36 @@ export function TradePanel({
             </span>
           </div>
         </div>
+
+        {/* Yield vs Funding breakdown — JLP/mSOL only */}
+        {col !== "SOL" && (funding || yieldInfo) && (
+          (() => {
+            const fundRate8h = funding?.rate8h ?? 0;
+            const yieldRate8h = yieldInfo?.rate8h ?? 0;
+            const net = fundRate8h - yieldRate8h;
+            const isSelfRepaying = net < 0;
+            const netColor = isSelfRepaying ? C.pos : net === 0 ? C.t1 : C.neg;
+            return (
+              <div style={{ background: C.panel2, borderRadius: 4, padding: "12px 14px", border: `1px solid ${C.border}` }}>
+                <div style={{ ...labelStyle, marginBottom: 8 }}>Yield vs Funding</div>
+                <SummaryRow label="Funding Rate"      value={`${fundRate8h >= 0 ? "+" : ""}${fundRate8h.toFixed(4)}% / 8h`} color={fundRate8h >= 0 ? C.neg : C.pos} />
+                <SummaryRow label={`${col} Yield`}    value={`−${yieldRate8h.toFixed(4)}% / 8h`} color={C.pos} />
+                <div style={{ borderTop: `1px solid ${C.border}`, margin: "6px 0" }} />
+                <SummaryRow label="Net Carry"         value={`${net >= 0 ? "+" : ""}${net.toFixed(4)}% / 8h`} color={netColor} />
+                {isSelfRepaying && (
+                  <div style={{
+                    marginTop: 6, padding: "4px 8px", borderRadius: 4,
+                    background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)",
+                    fontSize: 10, fontWeight: 600, color: C.pos, textAlign: "center",
+                    letterSpacing: 0.5, textTransform: "uppercase",
+                  }}>
+                    Self-Repaying
+                  </div>
+                )}
+              </div>
+            );
+          })()
+        )}
 
         {/* Confirmation modal */}
         {confirmDesc && (

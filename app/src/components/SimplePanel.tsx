@@ -19,6 +19,15 @@ const FEED_TO_MARKET: Record<string, string> = {
   "42amVS4KgzR9rA28tkVYqVXjq9Qa8dcZQMbH5EYFX6XC": "ETH-PERP",
 };
 
+const FEED_TO_PRICE_KEY: Record<string, string> = {
+  "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE": "sol",
+  "4cSM2e6rvbGQUFiJbqytoVMi5GgghSMr8LwVrT9VPSPo": "btc",
+  "42amVS4KgzR9rA28tkVYqVXjq9Qa8dcZQMbH5EYFX6XC": "eth",
+};
+
+const JLP_MINT = "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4";
+const MSOL_MINT = "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So";
+
 const C = {
   bg:        "#000",
   panel:     "#0a0a0b",
@@ -183,12 +192,37 @@ export const SimplePanel: FC<{
   if (positionForMarket?.isOpen) {
     const pos = positionForMarket;
     const entryPrice = Number(pos.entryPrice) / 1e6;
-    const pnlRaw = (markPrice - entryPrice) *
-      (Number(pos.perpSize) / 1e6 / markPrice) *
-      (pos.perpSide === 0 ? 1 : -1);
-    const collValue = Number(pos.collateralAmount) / 1e9 * solPrice;
-    const pnlPct = collValue > 0 ? (pnlRaw / collValue) * 100 : 0;
+    const notionalUsd = Number(pos.borrowAmountUsdc) / 1e6;
     const sideLabel = pos.perpSide === 0 ? "Long" : "Short";
+
+    // Use correct mark price for the position's market (not just solPrice)
+    const posPriceKey = FEED_TO_PRICE_KEY[pos.perpMarket] || "sol";
+    const posMarkPrice = prices[posPriceKey] || solPrice;
+
+    // Use correct decimals per collateral type
+    const collMint = pos.collateralMint || "";
+    const collDecimals = collMint === JLP_MINT ? 6 : 9;
+    const collNative = Number(pos.collateralAmount) / Math.pow(10, collDecimals);
+
+    // Collateral value: SOL uses live price, JLP/mSOL uses entry price (best available)
+    const collateralPrice = (collMint === JLP_MINT || collMint === MSOL_MINT)
+      ? Number(pos.collateralEntryPrice) / 1e6
+      : solPrice;
+    const collValue = collNative * collateralPrice;
+
+    // Power-aware PnL (matches PositionsTable formula)
+    const power = pos.powerMilli || 0;
+    let pnlRaw: number;
+    if (power === 2000 && entryPrice > 0) {
+      const exitSq = posMarkPrice * posMarkPrice;
+      const entrySq = entryPrice * entryPrice;
+      const delta = (exitSq - entrySq) / entrySq;
+      pnlRaw = delta * notionalUsd * (sideLabel === "Long" ? 1 : -1);
+    } else {
+      const priceDelta = sideLabel === "Long" ? posMarkPrice - entryPrice : entryPrice - posMarkPrice;
+      pnlRaw = entryPrice > 0 ? (priceDelta / entryPrice) * notionalUsd : 0;
+    }
+    const pnlPct = collValue > 0 ? (pnlRaw / collValue) * 100 : 0;
     const pnlCol = pnlRaw >= 0 ? C.pos : C.neg;
 
     return (
@@ -216,14 +250,14 @@ export const SimplePanel: FC<{
               ${collValue.toFixed(2)}
             </div>
             <div style={{ fontSize: 12, color: C.t2, marginTop: 4 }}>
-              {sideLabel} · {marketInfo.label} · ${markPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              {sideLabel} · {marketInfo.label} · ${posMarkPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
             </div>
           </div>
 
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "10px 0", borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}` }}>
             <span style={{ color: C.t2 }}>Unrealized PnL</span>
             <span style={{ fontFamily: MONO, fontWeight: 700, color: pnlCol }}>
-              {pnlRaw >= 0 ? "+" : ""}${pnlRaw.toFixed(2)} ({pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(2)}%)
+              {pnlRaw >= 0 ? "+" : ""}${Math.abs(pnlRaw) < 0.01 ? pnlRaw.toFixed(4) : pnlRaw.toFixed(2)} ({pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(2)}%)
             </span>
           </div>
 
@@ -239,7 +273,6 @@ export const SimplePanel: FC<{
               ? <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><Spinner size={12} color={C.neg} /> Closing…</span>
               : "Close Position"}
           </button>
-          {status && <div style={{ fontSize: 11, color: C.t2, textAlign: "center", fontFamily: MONO }}>{status}</div>}
         </div>
       </div>
     );
