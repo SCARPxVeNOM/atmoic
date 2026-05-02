@@ -213,7 +213,7 @@ export function ChartPanel({
         <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
           <span style={{
             fontSize: 20, fontWeight: 700,
-            fontFamily: "Geist Mono,monospace", color: "#fff6df",
+            fontFamily: "Geist Mono,monospace", color: "#ffffff",
           }}>${fmt(displayPrice)}</span>
           <span style={{
             fontSize: 12, fontFamily: "Geist Mono,monospace", fontWeight: 600,
@@ -224,9 +224,9 @@ export function ChartPanel({
         <div style={{ display: "flex", gap: 18, fontSize: 11, color: "rgba(255,232,177,0.56)" }}>
           {([
             ["Mark", `$${fmt(markPrice)}`, "#ffd874"],
-            ["Index", `$${fmt(indexPrice)}`, "#fff6df"],
+            ["Index", `$${fmt(indexPrice)}`, "#ffffff"],
             ["Funding", fundingRate8h != null ? `${fundingRate8h >= 0 ? "+" : ""}${fundingRate8h.toFixed(4)}%/8h` : "\u2014", fundingRate8h != null && fundingRate8h >= 0 ? "#3fcf91" : "#ff6b6b"],
-            ["24h Vol", volStr, "#fff6df"],
+            ["24h Vol", volStr, "#ffffff"],
             ["24h High", high24h > 0 ? `$${fmt(high24h)}` : "\u2014", "#3fcf91"],
             ["24h Low", low24h > 0 ? `$${fmt(low24h)}` : "\u2014", "#ff6b6b"],
           ] as [string, string, string][]).map(([lbl, val, col]) => (

@@ -22,7 +22,7 @@ const C = {
   panel2:    "#111114",
   border:    "#1a1a1f",
   borderLit: "#26262e",
-  t1:        "#f5f5f7",
+  t1:        "#ffffff",
   t2:        "#8b8b94",
   t3:        "#4a4a52",
   pos:       "#22c55e",

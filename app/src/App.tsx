@@ -46,7 +46,7 @@ function PriceTag({ market, active, onClick }: {
       cursor: "pointer",
       transition: "background 0.15s, border-color 0.15s",
     }}>
-      <span style={{ fontSize: 12, fontWeight: 600, color: active ? "#f5f5f7" : "#8b8b94", letterSpacing: 0.2 }}>{market.label}</span>
+      <span style={{ fontSize: 12, fontWeight: 600, color: active ? "#ffffff" : "#8b8b94", letterSpacing: 0.2 }}>{market.label}</span>
       <span style={{
         fontSize: 11, fontFamily: "JetBrains Mono, Geist Mono, monospace", fontWeight: 500,
         color: market.change >= 0 ? "#22c55e" : "#ef4444", fontVariantNumeric: "tabular-nums",
@@ -95,7 +95,7 @@ export const App: FC = () => {
     <div style={{
       height: "100vh", display: "flex", flexDirection: "column",
       background: "#000",
-      color: "#f5f5f7",
+      color: "#ffffff",
       fontFamily: "Inter, system-ui, sans-serif",
     }}>
       {/* Header */}
@@ -118,7 +118,7 @@ export const App: FC = () => {
             height={26}
             style={{ display: "block", borderRadius: 4, objectFit: "cover" }}
           />
-          <span style={{ fontSize: 14, fontWeight: 600, color: "#f5f5f7", letterSpacing: -0.2 }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: "#ffffff", letterSpacing: -0.2 }}>
             IDL<span style={{ color: "#e2b85d" }}>Exchange</span>
           </span>
         </button>
@@ -132,7 +132,7 @@ export const App: FC = () => {
                 position: "relative",
                 padding: "0 14px", fontSize: 13, fontWeight: 500,
                 border: 0, background: "transparent", cursor: "pointer",
-                color: active ? "#f5f5f7" : "#8b8b94",
+                color: active ? "#ffffff" : "#8b8b94",
                 transition: "color 0.15s",
               }}>
                 {n}
@@ -167,7 +167,7 @@ export const App: FC = () => {
                 padding: "5px 11px", fontSize: 11, fontWeight: 500,
                 border: 0, cursor: "pointer",
                 background: uiMode === m ? "#111114" : "transparent",
-                color: uiMode === m ? "#f5f5f7" : "#8b8b94",
+                color: uiMode === m ? "#ffffff" : "#8b8b94",
                 transition: "background 0.15s, color 0.15s",
               }}>{m}</button>
             ))}
@@ -198,7 +198,7 @@ export const App: FC = () => {
               </span>
               <button onClick={() => disconnect()} style={{
                 padding: "6px 12px", background: "transparent", border: "1px solid #1a1a1f",
-                borderRadius: 4, color: "#f5f5f7", fontSize: 12, cursor: "pointer",
+                borderRadius: 4, color: "#ffffff", fontSize: 12, cursor: "pointer",
                 transition: "border-color 0.15s",
               }}
                 onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#26262e")}

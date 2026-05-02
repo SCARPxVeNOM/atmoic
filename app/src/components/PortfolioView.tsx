@@ -47,13 +47,13 @@ export function PortfolioView({
 
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: 24, background: "#000" }}>
-      <h2 style={{ fontSize: 20, fontWeight: 700, color: "#e6edf3", marginBottom: 20 }}>Portfolio Overview</h2>
+      <h2 style={{ fontSize: 20, fontWeight: 700, color: "#ffffff", marginBottom: 20 }}>Portfolio Overview</h2>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1, marginBottom: 1, background: "#1a1a1f" }}>
         {STATS.map(s => (
           <div key={s.label} style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16 }}>
             <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>{s.label}</div>
-            <div style={{ fontSize: 22, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: s.col || "#e6edf3" }}>{s.val}</div>
+            <div style={{ fontSize: 22, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: s.col || "#ffffff" }}>{s.val}</div>
             {s.sub && <div style={{ fontSize: 12, color: s.col || "#8b949e", marginTop: 2 }}>{s.sub}</div>}
           </div>
         ))}
@@ -63,7 +63,7 @@ export function PortfolioView({
       {portfolio && posCount > 0 && (
         <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16, marginBottom: 1 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: "#e6edf3" }}>Portfolio Health</span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "#ffffff" }}>Portfolio Health</span>
             <span style={{ fontSize: 20, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: phCol }}>
               {(phBps / 100).toFixed(1)}%
             </span>
@@ -75,7 +75,7 @@ export function PortfolioView({
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 1, marginTop: 14, background: "#1a1a1f" }}>
             <div style={{ background: "#0a0a0b", padding: "10px 0" }}>
               <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase" }}>Portfolio Margin</div>
-              <div style={{ fontSize: 14, fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3", marginTop: 2 }}>
+              <div style={{ fontSize: 14, fontFamily: "IBM Plex Mono,monospace", color: "#ffffff", marginTop: 2 }}>
                 ${portfolio.portfolioMarginUsd.toFixed(2)}
               </div>
             </div>
@@ -99,7 +99,7 @@ export function PortfolioView({
         {/* Correlation Matrix */}
         {portfolio && portfolio.correlationMatrix.markets.length > 1 && (
           <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "#e6edf3", marginBottom: 14 }}>Correlation Matrix</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#ffffff", marginBottom: 14 }}>Correlation Matrix</div>
             <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
               <thead>
                 <tr>
@@ -131,7 +131,7 @@ export function PortfolioView({
 
         {/* Collateral Breakdown */}
         <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "#e6edf3", marginBottom: 14 }}>Collateral Breakdown</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#ffffff", marginBottom: 14 }}>Collateral Breakdown</div>
           {([
             ["SOL", hasPosition ? "100%" : "0%", hasPosition ? 1 : 0],
             ["JLP", "0%", 0],
@@ -142,7 +142,7 @@ export function PortfolioView({
               <div style={{ flex: 1, background: "#1a1a1f", borderRadius: 0, height: 6 }}>
                 <div style={{ width: `${frac * 100}%`, height: "100%", background: accent, borderRadius: 0 }} />
               </div>
-              <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3", width: 32, textAlign: "right" }}>{pct}</span>
+              <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#ffffff", width: 32, textAlign: "right" }}>{pct}</span>
             </div>
           ))}
         </div>

@@ -22,7 +22,7 @@ function QueueRow({ price, size, side }: { price: number; size: number; side: "b
       }} />
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, position: "relative" }}>
         <span style={{ fontFamily: "IBM Plex Mono,monospace", color }}>${price.toFixed(2)}</span>
-        <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>{fmt(size)}</span>
+        <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>{fmt(size)}</span>
       </div>
     </div>
   );
@@ -150,7 +150,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-            <h2 style={{ fontSize: 20, fontWeight: 700, color: "#e6edf3", margin: 0 }}>DFBA Batch Auction</h2>
+            <h2 style={{ fontSize: 20, fontWeight: 700, color: "#ffffff", margin: 0 }}>DFBA Batch Auction</h2>
             <span style={{
               fontSize: 11, padding: "2px 8px", borderRadius: 20,
               background: "rgba(88,166,255,0.12)", color: accent, border: `1px solid ${accent}30`,
@@ -204,7 +204,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
         <span style={{ fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: accent, fontSize: 15 }}>${oraclePrice.toFixed(2)}</span>
         <span style={{ color: "#1a1a1f" }}>&middot;</span>
         <span style={{ color: "#8b949e" }}>Cap &plusmn;0.3%</span>
-        <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>
+        <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>
           ${(oraclePrice * (1 - CAP)).toFixed(2)} &ndash; ${(oraclePrice * (1 + CAP)).toFixed(2)}
         </span>
         <span style={{ marginLeft: "auto", fontSize: 11, color: "#8b949e" }}>Orders outside cap are rejected</span>
@@ -212,7 +212,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
 
       {/* Place order */}
       <div style={{ background: "#0a0a0b", borderRadius: 0, padding: 20, border: "1px solid #1a1a1f", marginBottom: 1 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: "#e6edf3", marginBottom: 14 }}>Place Order</div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#ffffff", marginBottom: 14 }}>Place Order</div>
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
           <div>
             <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>Side</div>
@@ -237,7 +237,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
             <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>Price ($)</div>
             <input value={price} onChange={e => setPrice(e.target.value)} style={{
               width: "100%", background: "#000", border: "1px solid #1a1a1f", borderRadius: 0,
-              padding: "8px 10px", color: "#e6edf3", fontFamily: "IBM Plex Mono,monospace",
+              padding: "8px 10px", color: "#ffffff", fontFamily: "IBM Plex Mono,monospace",
               fontSize: 14, outline: "none", boxSizing: "border-box",
             }} />
           </div>
@@ -246,7 +246,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
             <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>Size (USDC)</div>
             <input value={size} onChange={e => setSize(e.target.value)} style={{
               width: "100%", background: "#000", border: "1px solid #1a1a1f", borderRadius: 0,
-              padding: "8px 10px", color: "#e6edf3", fontFamily: "IBM Plex Mono,monospace",
+              padding: "8px 10px", color: "#ffffff", fontFamily: "IBM Plex Mono,monospace",
               fontSize: 14, outline: "none", boxSizing: "border-box",
             }} />
           </div>
@@ -275,7 +275,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
             <span style={{ color: "#8b949e" }}>Cleared @ </span>
             <span style={{ fontFamily: "IBM Plex Mono,monospace", color: accent, fontWeight: 700 }}>${lastClearing.toFixed(2)}</span>
             <span style={{ color: "#8b949e" }}> &middot; Vol </span>
-            <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>
+            <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>
               ${batchQueue ? fmt(batchQueue.totalVolume) : "—"}
             </span>
           </div>

@@ -17,6 +17,25 @@ const FEED_TO_MARKET: Record<string, string> = {
   "42amVS4KgzR9rA28tkVYqVXjq9Qa8dcZQMbH5EYFX6XC": "ETH-PERP",
 };
 
+const C = {
+  bg:        "#000",
+  panel:     "#0a0a0b",
+  panel2:    "#111114",
+  border:    "#1a1a1f",
+  borderLit: "#26262e",
+  t1:        "#ffffff",
+  t2:        "#8b8b94",
+  t3:        "#4a4a52",
+  pos:       "#22c55e",
+  posBg:     "rgba(34,197,94,0.10)",
+  neg:       "#ef4444",
+  negBg:     "rgba(239,68,68,0.10)",
+  gold:      "#e2b85d",
+  goldBright:"#ffe18a",
+};
+const MONO = "JetBrains Mono, IBM Plex Mono, Geist Mono, monospace";
+const SANS = "Inter, system-ui, sans-serif";
+
 export const SimplePanel: FC<{
   positions: PositionView[];
   prices: Record<string, number>;
@@ -35,11 +54,9 @@ export const SimplePanel: FC<{
 
   const marketInfo = MARKETS.find(m => m.symbol === market) || MARKETS[0];
   const markPrice = prices[marketInfo.priceKey] || solPrice;
-  // Collateral is SOL, so value = SOL amount * SOL price * leverage
   const collateralValue = Number(amount) * solPrice;
   const estValue = collateralValue * leverage;
 
-  // Find position for current market
   const positionForMarket = positions.find(p => FEED_TO_MARKET[p.perpMarket] === market);
 
   const sendTx = async (endpoint: string, body: any) => {
@@ -73,13 +90,7 @@ export const SimplePanel: FC<{
   };
 
   const requestOpen = (side: "Long" | "Short") => {
-    const desc = describeTransaction({
-      type: "open",
-      side,
-      collateralSol: Number(amount),
-      leverage,
-      solPrice,
-    });
+    const desc = describeTransaction({ type: "open", side, collateralSol: Number(amount), leverage, solPrice });
     setConfirm({ side, desc });
   };
 
@@ -127,26 +138,46 @@ export const SimplePanel: FC<{
     }
   };
 
-  // Optimistic confirmation banner
+  const card: React.CSSProperties = {
+    background: C.panel,
+    border: `1px solid ${C.border}`,
+    borderRadius: 0,
+    fontFamily: SANS,
+  };
+
+  const label: React.CSSProperties = {
+    fontSize: 10,
+    color: C.t3,
+    textTransform: "uppercase",
+    letterSpacing: "0.10em",
+    fontWeight: 500,
+    marginBottom: 6,
+  };
+
+  // Optimistic banner
   if (optimistic && !positionForMarket?.isOpen) {
     return (
-      <div className="border border-indigo-500/50 rounded-xl p-5 animate-pulse">
-        <div className="flex items-center gap-2 mb-2">
-          <div className="w-2 h-2 rounded-full bg-indigo-400 animate-ping" />
-          <span className="text-sm text-indigo-300">Confirming on Solana...</span>
+      <div style={{ ...card, padding: 24 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+          <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.gold }} />
+          <span style={{ fontSize: 12, color: C.gold, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+            Confirming on Solana…
+          </span>
         </div>
-        <div className="text-2xl font-mono font-bold">
+        <div style={{ fontSize: 28, fontFamily: MONO, fontWeight: 700, color: C.t1 }}>
           ${optimistic.value.toFixed(2)}
-          <span className="text-sm text-slate-500 ml-2">{optimistic.side} {marketInfo.label}</span>
+          <span style={{ fontSize: 13, color: C.t2, marginLeft: 10, fontWeight: 400 }}>
+            {optimistic.side} {marketInfo.label}
+          </span>
         </div>
-        <div className="text-xs text-slate-500 mt-1">
+        <div style={{ fontSize: 11, color: C.t3, marginTop: 6 }}>
           Transaction sent — waiting for block confirmation
         </div>
       </div>
     );
   }
 
-  // Open position view for this market
+  // Open position view
   if (positionForMarket?.isOpen) {
     const pos = positionForMarket;
     const entryPrice = Number(pos.entryPrice) / 1e6;
@@ -155,182 +186,241 @@ export const SimplePanel: FC<{
       (pos.perpSide === 0 ? 1 : -1);
     const collValue = Number(pos.collateralAmount) / 1e9 * solPrice;
     const pnlPct = collValue > 0 ? (pnlRaw / collValue) * 100 : 0;
+    const sideLabel = pos.perpSide === 0 ? "Long" : "Short";
+    const pnlCol = pnlRaw >= 0 ? C.pos : C.neg;
 
     return (
-      <div className="border border-slate-800 rounded-xl p-5 space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium">Your {marketInfo.label} Position</span>
-            <div className="flex gap-1">
-              {MARKETS.map(m => (
-                <button
-                  key={m.symbol}
-                  onClick={() => setMarket(m.symbol)}
-                  className={`px-2 py-0.5 text-xs rounded-md ${
-                    market === m.symbol
-                      ? "bg-indigo-600 text-white"
-                      : "bg-slate-800 text-slate-400 hover:bg-slate-700"
-                  }`}
-                >{m.label}</button>
-              ))}
+      <div style={{ ...card, padding: 0, overflow: "hidden" }}>
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
+          <span style={{ fontSize: 11, color: C.t2, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            {marketInfo.label} Position
+          </span>
+          <div style={{ display: "flex", gap: 2 }}>
+            {MARKETS.map(m => (
+              <button key={m.symbol} onClick={() => setMarket(m.symbol)} style={{
+                padding: "4px 10px", fontSize: 11, fontWeight: 600,
+                border: `1px solid ${market === m.symbol ? C.borderLit : C.border}`,
+                borderRadius: 0, background: market === m.symbol ? C.panel2 : "transparent",
+                color: market === m.symbol ? C.t1 : C.t2, cursor: "pointer",
+              }}>{m.label}</button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ padding: "20px 16px", display: "flex", flexDirection: "column", gap: 16 }}>
+          <div>
+            <div style={{ fontSize: 30, fontFamily: MONO, fontWeight: 700, color: C.t1, lineHeight: 1 }}>
+              ${collValue.toFixed(2)}
+            </div>
+            <div style={{ fontSize: 12, color: C.t2, marginTop: 4 }}>
+              {sideLabel} · {marketInfo.label} · ${markPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
             </div>
           </div>
-          <span className={`text-sm font-mono ${pnlRaw >= 0 ? "text-green-400" : "text-red-400"}`}>
-            {pnlRaw >= 0 ? "+" : ""}{pnlPct.toFixed(2)}%
-          </span>
-        </div>
 
-        <div className="text-2xl font-mono font-bold">
-          ${collValue.toFixed(2)}
-          <span className="text-sm text-slate-500 ml-2">
-            {pos.perpSide === 0 ? "Long" : "Short"} {marketInfo.label}
-          </span>
-        </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "10px 0", borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}` }}>
+            <span style={{ color: C.t2 }}>Unrealized PnL</span>
+            <span style={{ fontFamily: MONO, fontWeight: 700, color: pnlCol }}>
+              {pnlRaw >= 0 ? "+" : ""}${pnlRaw.toFixed(2)} ({pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(2)}%)
+            </span>
+          </div>
 
-        <button
-          onClick={close}
-          disabled={busy}
-          className="w-full bg-slate-700 hover:bg-slate-600 disabled:opacity-40 rounded-lg py-2.5 text-sm font-semibold"
-        >
-          {busy ? "Closing..." : "Close Position"}
-        </button>
-        {status && <p className="text-xs text-slate-400 text-center">{status}</p>}
+          <button onClick={close} disabled={busy} style={{
+            width: "100%", padding: "12px 0", border: `1px solid ${C.border}`,
+            borderRadius: 0, background: busy ? C.panel2 : "transparent",
+            color: busy ? C.t3 : C.neg, fontSize: 13, fontWeight: 600,
+            cursor: busy ? "not-allowed" : "pointer", fontFamily: SANS,
+            letterSpacing: "0.04em", textTransform: "uppercase",
+            transition: "background 0.15s, border-color 0.15s",
+          }}>
+            {busy ? "Closing…" : "Close Position"}
+          </button>
+          {status && <div style={{ fontSize: 11, color: C.t2, textAlign: "center", fontFamily: MONO }}>{status}</div>}
+        </div>
       </div>
     );
   }
 
+  // Default trade form
   return (
-    <div className="border border-slate-800 rounded-xl p-5 space-y-4">
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-slate-400">Start Trading</span>
-        <div className="flex gap-1">
+    <div style={{ ...card, padding: 0, overflow: "hidden" }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
+        <span style={{ fontSize: 11, color: C.t2, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 500 }}>
+          Start Trading
+        </span>
+        <div style={{ display: "flex", gap: 2 }}>
           {MARKETS.map(m => {
-            const hasPosition = positions.some(p => FEED_TO_MARKET[p.perpMarket] === m.symbol && p.isOpen);
+            const hasPos = positions.some(p => FEED_TO_MARKET[p.perpMarket] === m.symbol && p.isOpen);
+            const active = market === m.symbol;
             return (
-              <button
-                key={m.symbol}
-                onClick={() => setMarket(m.symbol)}
-                className={`px-2.5 py-1 text-xs rounded-md font-medium ${
-                  market === m.symbol
-                    ? "bg-indigo-600 text-white"
-                    : "bg-slate-800 text-slate-400 hover:bg-slate-700"
-                }`}
-              >
+              <button key={m.symbol} onClick={() => setMarket(m.symbol)} style={{
+                padding: "4px 10px", fontSize: 11, fontWeight: 600,
+                border: `1px solid ${active ? C.borderLit : C.border}`,
+                borderRadius: 0, background: active ? C.panel2 : "transparent",
+                color: active ? C.t1 : C.t2, cursor: "pointer", position: "relative",
+              }}>
                 {m.label}
-                {hasPosition && <span className="ml-1 text-green-400">*</span>}
+                {hasPos && <span style={{ position: "absolute", top: 2, right: 2, width: 4, height: 4, borderRadius: "50%", background: C.pos }} />}
               </button>
             );
           })}
         </div>
       </div>
 
-      <div className="text-xs text-slate-500 text-center">
-        {marketInfo.label} Price: <span className="font-mono text-white">
-          ${markPrice < 100 ? markPrice.toFixed(2) : markPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-        </span>
-      </div>
+      <div style={{ padding: "18px 16px", display: "flex", flexDirection: "column", gap: 16 }}>
 
-      <div>
-        <label className="block text-xs text-slate-500 mb-1">Amount (SOL)</label>
-        <input
-          type="number"
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 font-mono text-lg"
-          placeholder="0.1"
-          disabled={!publicKey}
-        />
-      </div>
-
-      <div>
-        <label className="block text-xs text-slate-500 mb-1">
-          Multiplier: <span className="font-mono text-white">{leverage}x</span>
-        </label>
-        <input
-          type="range"
-          min={1}
-          max={5}
-          value={leverage}
-          onChange={(e) => setLeverage(Number(e.target.value))}
-          className="w-full"
-          disabled={!publicKey}
-        />
-        <div className="flex justify-between text-xs text-slate-600 mt-0.5">
-          <span>1x</span><span>5x</span>
-        </div>
-      </div>
-
-      {/* Boost Mode (Power Perp) */}
-      <div className={`flex items-center justify-between px-3 py-2.5 rounded-lg border ${
-        powerMode ? "border-purple-500/40 bg-purple-950/20" : "border-slate-700 bg-slate-900"
-      }`}>
-        <div>
-          <span className={`text-xs font-semibold ${powerMode ? "text-purple-400" : "text-slate-400"}`}>
-            Boost Mode (x{"\u00B2"})
+        {/* Price */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 11, color: C.t3, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            {marketInfo.label} Price
           </span>
-          <p className="text-[10px] text-slate-600 mt-0.5">
-            {powerMode ? "Convex gains + 2x fees" : "Amplified payoff curve"}
-          </p>
+          <span style={{ fontFamily: MONO, fontSize: 15, fontWeight: 700, color: C.t1 }}>
+            ${markPrice < 100 ? markPrice.toFixed(2) : markPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+          </span>
         </div>
+
+        {/* Amount */}
+        <div>
+          <div style={label}>Amount (SOL)</div>
+          <div style={{
+            display: "flex", alignItems: "center",
+            background: C.panel2, border: `1px solid ${C.border}`,
+            borderRadius: 0, padding: "10px 12px", gap: 8,
+          }}>
+            <input
+              type="number"
+              value={amount}
+              onChange={e => setAmount(e.target.value)}
+              disabled={!publicKey}
+              style={{
+                flex: 1, background: "none", border: "none", outline: "none",
+                fontSize: 20, fontFamily: MONO, color: C.t1, width: 0,
+                fontFeatureSettings: "'tnum' 1",
+              }}
+              placeholder="0.1"
+            />
+            <span style={{ fontSize: 12, color: C.t2, fontWeight: 500, flexShrink: 0 }}>SOL</span>
+          </div>
+        </div>
+
+        {/* Leverage */}
+        <div>
+          <div style={{ ...label, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <span>Multiplier</span>
+            <span style={{ fontFamily: MONO, fontSize: 12, color: C.t1, textTransform: "none", fontWeight: 700 }}>{leverage}x</span>
+          </div>
+          <input
+            type="range" min={1} max={5} step={1} value={leverage}
+            onChange={e => setLeverage(Number(e.target.value))}
+            disabled={!publicKey}
+            style={{ width: "100%", accentColor: C.gold, marginBottom: 4 }}
+          />
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.t3, fontFamily: MONO }}>
+            <span>1x</span><span>5x</span>
+          </div>
+        </div>
+
+        {/* Boost Mode */}
         <button
           onClick={() => setPowerMode(v => !v)}
           disabled={!publicKey}
-          className={`w-9 h-5 rounded-full relative transition-colors ${
-            powerMode ? "bg-purple-600" : "bg-slate-700"
-          }`}
-        >
-          <div className={`w-3.5 h-3.5 rounded-full bg-white absolute top-[3px] transition-all ${
-            powerMode ? "left-[18px]" : "left-[3px]"
-          }`} />
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "10px 12px", borderRadius: 0,
+            background: powerMode ? "rgba(226,184,93,0.07)" : C.panel2,
+            border: `1px solid ${powerMode ? C.gold : C.border}`,
+            cursor: publicKey ? "pointer" : "not-allowed", width: "100%",
+            transition: "background 0.15s, border-color 0.15s",
+          }}>
+          <div style={{ textAlign: "left" }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: powerMode ? C.goldBright : C.t1, letterSpacing: "0.02em" }}>
+              Boost Mode (×²)
+            </div>
+            <div style={{ fontSize: 10, color: C.t3, marginTop: 2 }}>
+              {powerMode ? "Convex gains · 2x fees apply" : "Amplified payoff curve"}
+            </div>
+          </div>
+          <div style={{
+            width: 34, height: 18, borderRadius: 9, position: "relative", flexShrink: 0,
+            background: powerMode ? C.gold : C.border, transition: "background 0.15s",
+          }}>
+            <div style={{
+              width: 14, height: 14, borderRadius: 7,
+              background: powerMode ? "#000" : C.t2,
+              position: "absolute", top: 2,
+              left: powerMode ? 18 : 2, transition: "left 0.15s, background 0.15s",
+            }} />
+          </div>
         </button>
-      </div>
 
-      <div className="text-center text-sm text-slate-400">
-        Position value: <span className="font-mono text-white">${estValue.toFixed(2)}</span>
-      </div>
+        {/* Position value */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "10px 0", borderTop: `1px solid ${C.border}` }}>
+          <span style={{ fontSize: 11, color: C.t2 }}>Position value</span>
+          <span style={{ fontFamily: MONO, fontSize: 15, fontWeight: 700, color: C.t1 }}>${estValue.toFixed(2)}</span>
+        </div>
 
-      {confirm ? (
-        <div className="border border-indigo-500/30 bg-indigo-950/30 rounded-lg p-4 space-y-3">
-          <p className="text-xs text-slate-300 font-medium">Confirm Transaction</p>
-          <p className="text-sm text-slate-200">{confirm.desc}</p>
-          <div className="flex gap-2">
+        {/* Confirm modal */}
+        {confirm ? (
+          <div style={{ background: C.panel2, border: `1px solid ${C.borderLit}`, borderRadius: 0, padding: 14 }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: C.t1, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+              Confirm Transaction
+            </div>
+            <div style={{ fontSize: 12, color: C.t2, marginBottom: 14, lineHeight: 1.6 }}>{confirm.desc}</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={executeOpen} style={{
+                flex: 1, padding: "10px 0", borderRadius: 0, border: 0,
+                background: confirm.side === "Long" ? C.pos : C.neg,
+                color: "#000", fontSize: 12, fontWeight: 700, cursor: "pointer",
+                letterSpacing: "0.04em", textTransform: "uppercase", fontFamily: SANS,
+              }}>Confirm</button>
+              <button onClick={() => setConfirm(null)} style={{
+                flex: 1, padding: "10px 0", borderRadius: 0,
+                border: `1px solid ${C.border}`, background: "transparent",
+                color: C.t2, fontSize: 12, cursor: "pointer", fontFamily: SANS,
+              }}>Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 1, background: C.border }}>
             <button
-              onClick={executeOpen}
-              className="flex-1 bg-indigo-600 hover:bg-indigo-500 rounded-lg py-2 text-sm font-semibold"
-            >
-              Confirm
+              onClick={() => requestOpen("Long")}
+              disabled={!publicKey || busy}
+              style={{
+                flex: 1, padding: "13px 0", borderRadius: 0, border: 0,
+                background: !publicKey || busy ? C.panel2 : C.pos,
+                color: !publicKey || busy ? C.t3 : "#000",
+                fontSize: 13, fontWeight: 700, cursor: !publicKey || busy ? "not-allowed" : "pointer",
+                letterSpacing: "0.04em", textTransform: "uppercase", fontFamily: SANS,
+                transition: "opacity 0.15s",
+              }}>
+              {busy ? "…" : `Long ${marketInfo.label}`}
             </button>
             <button
-              onClick={() => setConfirm(null)}
-              className="flex-1 bg-slate-700 hover:bg-slate-600 rounded-lg py-2 text-sm"
-            >
-              Cancel
+              onClick={() => requestOpen("Short")}
+              disabled={!publicKey || busy}
+              style={{
+                flex: 1, padding: "13px 0", borderRadius: 0, border: 0,
+                background: !publicKey || busy ? C.panel2 : C.neg,
+                color: !publicKey || busy ? C.t3 : "#000",
+                fontSize: 13, fontWeight: 700, cursor: !publicKey || busy ? "not-allowed" : "pointer",
+                letterSpacing: "0.04em", textTransform: "uppercase", fontFamily: SANS,
+                transition: "opacity 0.15s",
+              }}>
+              {busy ? "…" : `Short ${marketInfo.label}`}
             </button>
           </div>
-        </div>
-      ) : (
-        <div className="flex gap-2">
-          <button
-            onClick={() => requestOpen("Long")}
-            disabled={!publicKey || busy}
-            className="flex-1 bg-green-600 hover:bg-green-700 disabled:opacity-40 rounded-lg py-2.5 text-sm font-bold"
-          >
-            {busy ? "..." : `Long ${marketInfo.label}`}
-          </button>
-          <button
-            onClick={() => requestOpen("Short")}
-            disabled={!publicKey || busy}
-            className="flex-1 bg-red-600 hover:bg-red-700 disabled:opacity-40 rounded-lg py-2.5 text-sm font-bold"
-          >
-            {busy ? "..." : `Short ${marketInfo.label}`}
-          </button>
-        </div>
-      )}
+        )}
 
-      {!publicKey && (
-        <p className="text-xs text-slate-500 text-center">Connect wallet to start</p>
-      )}
-      {status && <p className="text-xs text-slate-400 text-center">{status}</p>}
+        {!publicKey && (
+          <div style={{ fontSize: 11, color: C.t3, textAlign: "center", letterSpacing: "0.04em" }}>
+            Connect wallet to start
+          </div>
+        )}
+        {status && (
+          <div style={{ fontSize: 11, color: C.t2, textAlign: "center", fontFamily: MONO }}>{status}</div>
+        )}
+      </div>
     </div>
   );
 };

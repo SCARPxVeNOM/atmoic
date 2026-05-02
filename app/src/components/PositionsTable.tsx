@@ -271,7 +271,7 @@ export function PositionsTable({
           <button key={t.id} onClick={() => setTab(t.id)} style={{
             padding: "7px 14px", fontSize: 12, fontWeight: 500,
             border: "none", background: "transparent", cursor: "pointer",
-            color: tab === t.id ? "#e6edf3" : "#8b949e",
+            color: tab === t.id ? "#ffffff" : "#8b949e",
             borderBottom: `2px solid ${tab === t.id ? accent : "transparent"}`,
             transition: "color 0.15s",
           }}>{t.label}</button>
@@ -312,7 +312,7 @@ export function PositionsTable({
                     {/* Market + badges */}
                     <td style={{ padding: "6px 10px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                        <span style={{ color: "#e6edf3", fontWeight: 600 }}>{p.market}</span>
+                        <span style={{ color: "#ffffff", fontWeight: 600 }}>{p.market}</span>
                         {p.isPower && <span style={{ fontSize: 9, color: "#a78bfa", background: "#1a0a2e", padding: "1px 4px", borderRadius: 3, fontWeight: 700 }}>{"\u00B2"}</span>}
                         <span style={{ fontSize: 9, color: p.collateralColor, background: `${p.collateralColor}18`, padding: "1px 4px", borderRadius: 3, fontWeight: 600 }}>{p.collateralLabel}</span>
                       </div>
@@ -331,30 +331,30 @@ export function PositionsTable({
                     </td>
 
                     {/* Leverage */}
-                    <td style={{ padding: "6px 10px", fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3", fontWeight: 600 }}>
+                    <td style={{ padding: "6px 10px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff", fontWeight: 600 }}>
                       {p.lv > 0 ? `${p.lv}x` : "-"}
                     </td>
 
                     {/* Size (notional) */}
-                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>
                       {fmtPrice(p.sizeUsd)}
                     </td>
 
                     {/* Collateral */}
                     <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace" }}>
-                      <div style={{ color: "#e6edf3" }}>{fmtPrice(p.margin / (1 - (HAIRCUTS[getCollateralMintFromLabel(p.collateralLabel)] || 0)))}</div>
+                      <div style={{ color: "#ffffff" }}>{fmtPrice(p.margin / (1 - (HAIRCUTS[getCollateralMintFromLabel(p.collateralLabel)] || 0)))}</div>
                       <div style={{ fontSize: 10, color: "#484f58" }}>
                         {p.collateralTokens.toFixed(p.collateralLabel === "JLP" ? 4 : 6)} {p.collateralLabel}
                       </div>
                     </td>
 
                     {/* Entry */}
-                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>
                       {fmtPrice(p.entry)}
                     </td>
 
                     {/* Mark */}
-                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>
                       {fmtPrice(p.mark)}
                     </td>
 
@@ -406,7 +406,7 @@ export function PositionsTable({
                           onClick={() => closePosition(p.marketSymbol)}
                           style={{
                             padding: "4px 10px", borderRadius: 6, border: "1px solid #30363d",
-                            background: "transparent", color: busy === p.marketSymbol ? "#8b949e" : "#e6edf3", fontSize: 11,
+                            background: "transparent", color: busy === p.marketSymbol ? "#8b949e" : "#ffffff", fontSize: 11,
                             cursor: busy === p.marketSymbol ? "not-allowed" : "pointer", whiteSpace: "nowrap",
                           }}
                           onMouseEnter={e => {
@@ -420,7 +420,7 @@ export function PositionsTable({
                             const t = e.currentTarget;
                             t.style.background = "transparent";
                             t.style.borderColor = "#30363d";
-                            t.style.color = "#e6edf3";
+                            t.style.color = "#ffffff";
                           }}
                         >{busy === p.marketSymbol ? "Closing..." : closePercent < 100 ? `Close ${closePercent}%` : "Close"}</button>
                       </div>
@@ -458,7 +458,7 @@ function TradeHistoryTab({ trades }: { trades: TradeRecord[] }) {
     <div>
       {/* Summary bar */}
       <div style={{ display: "flex", gap: 20, padding: "6px 12px", borderBottom: "1px solid #161b22", fontSize: 11, color: "#8b949e" }}>
-        <span>Trades: <b style={{ color: "#e6edf3" }}>{trades.length}</b></span>
+        <span>Trades: <b style={{ color: "#ffffff" }}>{trades.length}</b></span>
         <span>Wins: <b style={{ color: "#3fb68b" }}>{wins}</b></span>
         <span>Losses: <b style={{ color: "#ff5353" }}>{trades.length - wins}</b></span>
         <span>Win Rate: <b style={{ color: wins / trades.length > 0.5 ? "#3fb68b" : "#ff5353" }}>{(wins / trades.length * 100).toFixed(0)}%</b></span>
@@ -480,7 +480,7 @@ function TradeHistoryTab({ trades }: { trades: TradeRecord[] }) {
         <tbody>
           {trades.map((t, i) => (
             <tr key={i} style={{ borderBottom: "1px solid #161b22" }}>
-              <td style={{ padding: "6px 10px", color: "#e6edf3", fontWeight: 600 }}>
+              <td style={{ padding: "6px 10px", color: "#ffffff", fontWeight: 600 }}>
                 {t.market.replace("-PERP", "-USD")}
               </td>
               <td style={{ padding: "6px 10px" }}>
@@ -495,13 +495,13 @@ function TradeHistoryTab({ trades }: { trades: TradeRecord[] }) {
                   background: t.collateralType === "JLP" ? "#f59e0b18" : t.collateralType === "mSOL" ? "#06b6d418" : "#3fb68b18",
                 }}>{t.collateralType}</span>
               </td>
-              <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>
+              <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>
                 ${t.size.toFixed(2)}
               </td>
               <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#8b949e" }}>
                 ${t.entryPrice >= 1000 ? t.entryPrice.toFixed(2) : t.entryPrice.toFixed(4)}
               </td>
-              <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>
+              <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>
                 ${t.exitPrice >= 1000 ? t.exitPrice.toFixed(2) : t.exitPrice.toFixed(4)}
               </td>
               <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace" }}>
