@@ -62,11 +62,9 @@ export const IntroPage: FC<IntroPageProps> = ({ onEnter }) => {
     const phoneCanvas = phoneCanvasRef.current!;
 
     const chapters = Array.from(root.querySelectorAll<HTMLElement>(".chapter"));
-    const state = { progress: 0, chapterProgress: 0, chapter: 0 };
+    const state = { chapterProgress: 0, chapter: 0 };
 
     const updateScroll = () => {
-      const max = document.documentElement.scrollHeight - window.innerHeight;
-      state.progress = Math.max(0, Math.min(1, window.scrollY / Math.max(1, max)));
       let bestIdx = 0;
       let bestScore = -Infinity;
       chapters.forEach((c, i) => {

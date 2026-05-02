@@ -100,7 +100,7 @@ export const VaultScene: FC = () => {
     };
 
     loader.load(
-      asset("vault animation final.glb"),
+      asset("vault.glb"),
       (gltf) => {
         scene.add(gltf.scene);
         console.log("[vault] animations:", gltf.animations.map(a => `${a.name} (${a.duration.toFixed(2)}s)`));
@@ -120,7 +120,7 @@ export const VaultScene: FC = () => {
         modelReady = true;
       },
       undefined,
-      (err) => console.error("vault.glb load failed:", err)
+      (err) => console.error("vault.glb load failed:", err),
     );
 
     let targetProgress = 0;
