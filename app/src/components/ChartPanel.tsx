@@ -95,7 +95,7 @@ export function ChartPanel({
     if (!containerRef.current) return;
 
     const chart = createChart(containerRef.current, {
-      layout: { background: { color: "#09100a" }, textColor: "rgba(255,232,177,0.56)", fontSize: 11, fontFamily: "Geist Mono" },
+      layout: { background: { color: "#000" }, textColor: "#8b8b94", fontSize: 11, fontFamily: "JetBrains Mono, Geist Mono, monospace" },
       grid: { vertLines: { color: "rgba(214,168,74,0.06)" }, horzLines: { color: "rgba(214,168,74,0.06)" } },
       crosshair: {
         mode: 1,
@@ -187,11 +187,10 @@ export function ChartPanel({
   return (
     <div style={{
       display: "flex", flexDirection: "column", height: "100%",
-      background: "linear-gradient(180deg, rgba(15,21,13,0.94), rgba(8,13,8,0.98))",
-      border: "1px solid rgba(214,168,74,0.18)",
-      borderRadius: 8,
+      background: "#000",
+      border: "1px solid #1a1a1f",
+      borderRadius: 4,
       overflow: "hidden",
-      boxShadow: "inset 0 1px 0 rgba(255,246,223,0.04), 0 18px 60px rgba(0,0,0,0.22)",
     }}>
       {/* Stats bar */}
       <div style={{

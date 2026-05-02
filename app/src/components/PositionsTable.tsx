@@ -262,7 +262,7 @@ export function PositionsTable({
   return (
     <div style={{
       height: 240, flexShrink: 0,
-      borderTop: "1px solid #30363d", background: "#0d1117",
+      borderTop: "1px solid #1a1a1f", background: "#000",
       display: "flex", flexDirection: "column",
     }}>
       {/* Tab bar */}
@@ -300,7 +300,7 @@ export function PositionsTable({
                     <th key={h} style={{
                       padding: "5px 10px", color: "#8b949e", fontWeight: 400,
                       textAlign: rightAligned.includes(h) ? "right" : "left",
-                      whiteSpace: "nowrap", position: "sticky", top: 0, background: "#0d1117",
+                      whiteSpace: "nowrap", position: "sticky", top: 0, background: "#000",
                       borderBottom: "1px solid #21262d",
                     }}>{h}</th>
                   ))}
@@ -471,7 +471,7 @@ function TradeHistoryTab({ trades }: { trades: TradeRecord[] }) {
               <th key={h} style={{
                 padding: "5px 10px", color: "#8b949e", fontWeight: 400,
                 textAlign: ["Size", "Entry", "Exit", "PnL"].includes(h) ? "right" : "left",
-                whiteSpace: "nowrap", position: "sticky", top: 0, background: "#0d1117",
+                whiteSpace: "nowrap", position: "sticky", top: 0, background: "#000",
                 borderBottom: "1px solid #21262d",
               }}>{h}</th>
             ))}

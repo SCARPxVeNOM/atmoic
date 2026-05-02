@@ -5,9 +5,9 @@ import { API_BASE } from "../config";
 import { usePrivySession } from "../hooks/usePrivySession";
 
 const COLLATERAL = [
-  { id: "SOL", label: "SOL", cut: 0, icon: "\u25CE" },
-  { id: "JLP", label: "JLP", cut: 25, icon: "\u2B21" },
-  { id: "mSOL", label: "mSOL", cut: 18, icon: "\u25C8" },
+  { id: "SOL",  label: "SOL",  cut: 0  },
+  { id: "JLP",  label: "JLP",  cut: 25 },
+  { id: "mSOL", label: "mSOL", cut: 18 },
 ];
 
 const LV_PRESETS = [2, 3, 5, 10];
@@ -15,11 +15,38 @@ const LV_PRESETS = [2, 3, 5, 10];
 /** Maintenance margin: 5%. Matches on-chain MAINTENANCE_MARGIN_BPS = 500. */
 const MAINTENANCE_MARGIN_PCT = 0.05;
 
+/* ── Tokens ─────────────────────────────────────────── */
+const C = {
+  bg:        "#000",
+  panel:     "#0a0a0b",
+  panel2:    "#111114",
+  border:    "#1a1a1f",
+  borderLit: "#26262e",
+  t1:        "#f5f5f7",
+  t2:        "#8b8b94",
+  t3:        "#4a4a52",
+  pos:       "#22c55e",
+  posBg:     "rgba(34,197,94,0.10)",
+  neg:       "#ef4444",
+  negBg:     "rgba(239,68,68,0.10)",
+  gold:      "#e2b85d",
+  goldBright:"#ffe18a",
+  goldBg:    "rgba(226,184,93,0.10)",
+};
+
+const MONO = "JetBrains Mono, IBM Plex Mono, Geist Mono, monospace";
+const SANS = "Inter, system-ui, sans-serif";
+
+const labelStyle = {
+  fontSize: 10, color: C.t3, textTransform: "uppercase" as const,
+  letterSpacing: "0.10em", fontWeight: 500, marginBottom: 8,
+};
+
 function SummaryRow({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 12 }}>
-      <span style={{ color: "#8b949e" }}>{label}</span>
-      <span style={{ fontFamily: "IBM Plex Mono,monospace", color: color || "#e6edf3" }}>{value}</span>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "5px 0", fontSize: 12 }}>
+      <span style={{ color: C.t3, fontFamily: SANS }}>{label}</span>
+      <span style={{ fontFamily: MONO, color: color || C.t1, fontFeatureSettings: "'tnum' 1" }}>{value}</span>
     </div>
   );
 }
@@ -43,7 +70,9 @@ const MARKET_TO_KEY: Record<string, string> = {
 };
 
 export function TradePanel({
-  accentColor,
+  // accentColor preserved for API compatibility but no longer used (locked palette)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  accentColor: _accentColor,
   solPrice,
   showProData,
   activeMarket,
@@ -59,7 +88,7 @@ export function TradePanel({
   const [col, setCol] = useState("SOL");
   const [amount, setAmount] = useState("0.5");
   const [leverage, setLeverage] = useState(5);
-  const [powerMode, setPowerMode] = useState(false); // Power perp (squeeth)
+  const [powerMode, setPowerMode] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [confirmDesc, setConfirmDesc] = useState<string | null>(null);
@@ -70,15 +99,13 @@ export function TradePanel({
   const { connection } = useConnection();
   const privy = usePrivySession();
 
-  const accent = accentColor || "#58a6ff";
   const perpMarket = MARKET_TO_PERP[activeMarket || "SOL-USD"] || "SOL-PERP";
   const priceKey = MARKET_TO_KEY[activeMarket || "SOL-USD"] || "sol";
   const markPrice = prices?.[priceKey] || solPrice || 0;
-  const solPriceVal = solPrice || 0; // SOL price (for SOL collateral valuation)
+  const solPriceVal = solPrice || 0;
   const sol = parseFloat(amount) || 0;
   const cut = COLLATERAL.find(c => c.id === col)?.cut || 0;
 
-  // Fetch collateral price for non-SOL collateral types
   const [collPrice, setCollPrice] = useState<number>(0);
   useEffect(() => {
     if (col === "SOL") { setCollPrice(solPriceVal); return; }
@@ -91,10 +118,8 @@ export function TradePanel({
       .catch(() => {});
   }, [col, solPriceVal]);
 
-  // effectivePrice: USD value per 1 unit of the selected collateral token
   const effectivePrice = col === "SOL" ? solPriceVal : collPrice;
 
-  // Fetch vault risk for Pro mode
   useEffect(() => {
     if (!showProData) return;
     const tick = () => {
@@ -109,17 +134,10 @@ export function TradePanel({
     const collUsd = sol * effectivePrice;
     const effColl = collUsd * (1 - cut / 100);
     const notional = collUsd * leverage;
-    const fee = notional * 0.001; // 10bps on notional
-    const netCollUsd = collUsd - fee; // after fee deduction
-    // Entry price is the PERP MARKET price (not collateral price)
+    const fee = notional * 0.001;
     const entryPrice = markPrice * (side === "Long" ? 1.0003 : 0.9997);
-
-    // Margin ratio = effective_collateral / notional
     const marginRatio = notional > 0 ? effColl / notional : 9.99;
 
-    // Liquidation price estimate
-    // For SOL collateral on SOL-perp: collateral value moves with perp price (correlated)
-    // For JLP/mSOL or cross-market: collateral value is ~fixed, only PnL changes
     const isCorrCollateral = col === "SOL" && perpMarket === "SOL-PERP";
     const liqPrice = (() => {
       if (notional <= 0 || entryPrice <= 0) return 0;
@@ -127,7 +145,6 @@ export function TradePanel({
       const cutFactor = (1 - cut / 100);
 
       if (isCorrCollateral) {
-        // SOL collateral on SOL-perp: collateral value moves with price
         const collSol = sol;
         if (side === "Long") {
           const denom = collSol * cutFactor + notional / entryPrice;
@@ -138,11 +155,6 @@ export function TradePanel({
           return (target - notional) / denom;
         }
       } else {
-        // Non-correlated: collateral USD is ~fixed, only PnL changes
-        // margin = (collUsd * cutFactor + PnL) / notional = 0.05
-        // Long PnL = (P - entry) / entry * notional
-        // collUsd*cutFactor + (P-entry)/entry * notional = target
-        // P * notional/entry = target - collUsd*cutFactor + notional
         if (side === "Long") {
           const num = (target - effColl + notional) * entryPrice;
           return num > 0 ? num / notional : 0;
@@ -153,14 +165,14 @@ export function TradePanel({
       }
     })();
 
-    // Color coding for margin ratio
     const marginPct = marginRatio * 100;
-    const healthCol = marginPct > 15 ? "#3fb68b" : marginPct > 8 ? "#d29922" : "#ff5353";
+    const healthCol = marginPct > 15 ? C.pos : marginPct > 8 ? C.gold : C.neg;
 
     return { notional, entryPrice, liqPrice, fee, marginRatio, healthCol };
   }, [sol, effectivePrice, markPrice, leverage, side, cut, col, perpMarket]);
 
-  const sideColor = side === "Long" ? "#3fb68b" : "#ff5353";
+  const sideColor = side === "Long" ? C.pos : C.neg;
+  const sideBg    = side === "Long" ? C.posBg : C.negBg;
   const btnDisabled = sol <= 0 || !publicKey || busy;
 
   const sendTx = async (endpoint: string, body: any) => {
@@ -175,7 +187,6 @@ export function TradePanel({
       throw new Error(err.message ?? err.error ?? "Transaction failed");
     }
     const data = await res.json();
-
     const b64List: string[] = data.txs ?? [data.tx];
     const txList = b64List.map((b64: string) =>
       VersionedTransaction.deserialize(Buffer.from(b64, "base64"))
@@ -186,9 +197,7 @@ export function TradePanel({
       signedList = await signAllTransactions(txList);
     } else {
       signedList = [];
-      for (const tx of txList) {
-        signedList.push(await signTransaction(tx));
-      }
+      for (const tx of txList) signedList.push(await signTransaction(tx));
     }
 
     let lastSig = "";
@@ -197,15 +206,14 @@ export function TradePanel({
       await connection.confirmTransaction(sig, "confirmed");
       lastSig = sig;
     }
-
     return lastSig;
   };
 
   const requestOpen = () => {
-    const collLabel = col === "SOL" ? `${sol} SOL` : `${sol} ${col}`;
+    const collLabel = `${sol} ${col}`;
     const notionalUsd = summary.notional.toFixed(2);
     const marketLabel = activeMarket || "SOL-USD";
-    const desc = `Open ${leverage}x ${side} ${marketLabel} \u2014 Deposit ${collLabel} ($${(sol * effectivePrice).toFixed(2)}) as margin, ${side.toLowerCase()} $${notionalUsd} notional${col !== "SOL" ? ` (auto-converts SOL \u2192 ${col})` : ""}`;
+    const desc = `Open ${leverage}x ${side} ${marketLabel} — Deposit ${collLabel} ($${(sol * effectivePrice).toFixed(2)}) as margin, ${side.toLowerCase()} $${notionalUsd} notional${col !== "SOL" ? ` (auto-converts SOL → ${col})` : ""}`;
     setConfirmDesc(desc);
   };
 
@@ -227,7 +235,7 @@ export function TradePanel({
         market: perpMarket,
         power: powerMode ? 2000 : 1000,
       });
-      setStatus(`Opened: ${sig.slice(0, 8)}...`);
+      setStatus(`Opened: ${sig.slice(0, 8)}…`);
       setOptimistic(null);
     } catch (e: any) {
       setStatus(e.message ?? String(e));
@@ -240,83 +248,90 @@ export function TradePanel({
   return (
     <div style={{
       width: 340, flexShrink: 0,
-      background: "#0d1117", borderLeft: "1px solid #30363d",
+      background: C.bg, borderLeft: `1px solid ${C.border}`,
       display: "flex", flexDirection: "column", overflowY: "auto",
+      fontFamily: SANS,
     }}>
-      {/* Long / Short toggle */}
-      <div style={{ display: "flex", borderBottom: "1px solid #30363d", flexShrink: 0 }}>
+      {/* Long / Short toggle — solid fill on selected side */}
+      <div style={{ display: "flex", padding: 12, gap: 8, borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
         {(["Long", "Short"] as const).map(s => {
-          const sc = s === "Long" ? "#3fb68b" : "#ff5353";
+          const sc   = s === "Long" ? C.pos : C.neg;
           const active = side === s;
           return (
             <button key={s} onClick={() => setSide(s)} style={{
-              flex: 1, padding: "13px 0", fontSize: 14, fontWeight: 700,
-              border: "none", cursor: "pointer", letterSpacing: "-0.01em",
-              background: active ? (s === "Long" ? "rgba(63,182,139,0.1)" : "rgba(255,83,83,0.1)") : "transparent",
-              color: active ? sc : "#8b949e",
-              borderBottom: `2px solid ${active ? sc : "transparent"}`,
-              transition: "all 0.15s",
-            }}>{s}</button>
+              flex: 1, padding: "10px 0", fontSize: 13, fontWeight: 600,
+              border: `1px solid ${active ? sc : C.border}`,
+              borderRadius: 4,
+              cursor: "pointer", letterSpacing: 0.2,
+              background: active ? sc : "transparent",
+              color: active ? "#000" : C.t2,
+              textTransform: "uppercase",
+              transition: "background 0.15s, color 0.15s, border-color 0.15s",
+            }}>{s === "Long" ? "Buy" : "Sell"}</button>
           );
         })}
       </div>
 
-      <div style={{ padding: "16px 16px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 14 }}>
+
         {/* Collateral chips */}
         <div>
-          <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Collateral</div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={labelStyle}>Collateral</div>
+          <div style={{ display: "flex", gap: 6 }}>
             {COLLATERAL.map(c => {
               const active = col === c.id;
               return (
                 <button key={c.id} onClick={() => setCol(c.id)} style={{
-                  flex: 1, padding: "9px 6px", borderRadius: 8,
-                  border: `1px solid ${active ? accent : "#30363d"}`,
-                  background: active ? `${accent}18` : "#161b22",
-                  cursor: "pointer", textAlign: "center", transition: "all 0.15s",
+                  flex: 1, padding: "9px 4px", borderRadius: 4,
+                  border: `1px solid ${active ? C.borderLit : C.border}`,
+                  background: active ? C.panel2 : "transparent",
+                  cursor: "pointer", textAlign: "center",
+                  transition: "background 0.15s, border-color 0.15s",
                 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: active ? accent : "#e6edf3" }}>{c.label}</div>
-                  <div style={{ fontSize: 10, color: "#8b949e", marginTop: 2 }}>{c.cut}% cut</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: active ? C.t1 : C.t2 }}>{c.label}</div>
+                  <div style={{ fontSize: 9, color: C.t3, marginTop: 3, fontFamily: MONO, letterSpacing: 0.4 }}>{c.cut}% CUT</div>
                 </button>
               );
             })}
           </div>
           {col !== "SOL" && (
-            <div style={{ fontSize: 10, color: "#58a6ff", marginTop: 6, display: "flex", alignItems: "center", gap: 4 }}>
-              {"\u26A1"} Auto-converts SOL {"\u2192"} {col} via Jupiter on deposit
+            <div style={{ fontSize: 10, color: C.t3, marginTop: 6, fontFamily: MONO, letterSpacing: 0.4 }}>
+              AUTO-CONVERTS SOL → {col} VIA JUPITER
             </div>
           )}
         </div>
 
         {/* Amount input */}
         <div>
-          <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
-            Deposit Amount {col !== "SOL" && <span style={{ color: "#58a6ff" }}>(in {col})</span>}
+          <div style={{ ...labelStyle, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <span>Deposit{col !== "SOL" ? ` (${col})` : ""}</span>
+            <span style={{ fontFamily: MONO, fontSize: 10, color: C.t3, textTransform: "none" }}>
+              ≈ ${(sol * effectivePrice).toFixed(2)}
+            </span>
           </div>
           <div style={{
-            display: "flex", alignItems: "center", background: "#161b22",
-            border: "1px solid #30363d", borderRadius: 8, padding: "9px 12px", gap: 8,
+            display: "flex", alignItems: "center", background: C.panel2,
+            border: `1px solid ${C.border}`, borderRadius: 4, padding: "10px 12px", gap: 8,
           }}>
             <input
               type="number" value={amount}
               onChange={e => setAmount(e.target.value)}
               style={{
                 flex: 1, background: "none", border: "none", outline: "none",
-                fontSize: 18, fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3", width: 0,
+                fontSize: 18, fontFamily: MONO, color: C.t1, width: 0,
+                fontFeatureSettings: "'tnum' 1",
               }}
             />
-            <span style={{ fontSize: 13, color: "#8b949e", flexShrink: 0 }}>{col}</span>
+            <span style={{ fontSize: 12, color: C.t2, flexShrink: 0, fontWeight: 500 }}>{col}</span>
             <button onClick={async () => {
               if (!publicKey || !connection) return;
               try {
                 if (col === "SOL") {
                   const bal = await connection.getBalance(publicKey);
-                  // Leave 0.01 SOL for fees
                   const max = Math.max(0, (bal / 1e9) - 0.01);
                   setAmount(max.toFixed(4));
                 } else {
                   const { PublicKey: PK } = await import("@solana/web3.js");
-                  const { TOKEN_PROGRAM_ID } = await import("@solana/spl-token");
                   const mint = col === "JLP"
                     ? new PK("27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4")
                     : new PK("mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So");
@@ -327,116 +342,117 @@ export function TradePanel({
                 }
               } catch { /* ignore */ }
             }} style={{
-              fontSize: 10, color: accent, background: `${accent}18`,
-              border: `1px solid ${accent}40`, borderRadius: 4, padding: "2px 7px",
-              cursor: "pointer", flexShrink: 0,
-            }}>MAX</button>
-          </div>
-          <div style={{ fontSize: 11, color: "#8b949e", marginTop: 5, fontFamily: "IBM Plex Mono,monospace" }}>
-            &asymp; ${(sol * effectivePrice).toFixed(2)}
+              fontSize: 10, color: C.gold, background: "transparent",
+              border: `1px solid ${C.border}`, borderRadius: 3, padding: "3px 8px",
+              cursor: "pointer", flexShrink: 0, fontWeight: 500, letterSpacing: 0.4,
+              transition: "border-color 0.15s, color 0.15s",
+            }}
+              onMouseEnter={(e) => { e.currentTarget.style.borderColor = C.gold; e.currentTarget.style.color = C.goldBright; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.gold; }}
+            >MAX</button>
           </div>
         </div>
 
         {/* Leverage */}
         <div>
-          <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Leverage</div>
+          <div style={{ ...labelStyle, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <span>Leverage</span>
+            <span style={{ fontFamily: MONO, fontSize: 12, color: C.t1, textTransform: "none", fontWeight: 600 }}>{leverage.toFixed(1)}×</span>
+          </div>
           <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
             {LV_PRESETS.map(lv => {
               const active = leverage === lv;
               return (
                 <button key={lv} onClick={() => setLeverage(lv)} style={{
-                  flex: 1, padding: "6px 0", borderRadius: 6,
-                  border: `1px solid ${active ? accent : "#30363d"}`,
-                  background: active ? `${accent}18` : "#161b22",
-                  color: active ? accent : "#8b949e",
-                  fontSize: 12, fontWeight: 700, cursor: "pointer", transition: "all 0.15s",
-                }}>{lv}x</button>
+                  flex: 1, padding: "7px 0", borderRadius: 4,
+                  border: `1px solid ${active ? C.borderLit : C.border}`,
+                  background: active ? C.panel2 : "transparent",
+                  color: active ? C.t1 : C.t2,
+                  fontSize: 12, fontWeight: 600, fontFamily: MONO,
+                  cursor: "pointer", transition: "background 0.15s, border-color 0.15s, color 0.15s",
+                }}>{lv}×</button>
               );
             })}
           </div>
           <input type="range" min={1} max={10} step={0.5} value={leverage}
             onChange={e => setLeverage(parseFloat(e.target.value))}
-            style={{ width: "100%", accentColor: accent }} />
-          <div style={{
-            textAlign: "center", fontSize: 13, color: accent,
-            fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, marginTop: 5,
-          }}>{leverage.toFixed(1)}x</div>
+            style={{ width: "100%", accentColor: C.gold }} />
         </div>
 
-        {/* Power Perp Toggle */}
-        <div style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          padding: "8px 12px", borderRadius: 8,
-          background: powerMode ? "#1a0a2e" : "#161b22",
-          border: `1px solid ${powerMode ? "#7c3aed" : "#30363d"}`,
-          transition: "all 0.2s",
-        }}>
+        {/* Power Mode */}
+        <button
+          onClick={() => setPowerMode(v => !v)}
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "10px 12px", borderRadius: 4,
+            background: powerMode ? C.goldBg : C.panel2,
+            border: `1px solid ${powerMode ? C.gold : C.border}`,
+            cursor: "pointer", textAlign: "left", width: "100%",
+            transition: "background 0.15s, border-color 0.15s",
+          }}>
           <div>
-            <div style={{ fontSize: 11, fontWeight: 600, color: powerMode ? "#a78bfa" : "#8b949e" }}>
-              Power Mode (x{"\u00B2"})
+            <div style={{ fontSize: 11.5, fontWeight: 600, color: powerMode ? C.goldBright : C.t1, letterSpacing: 0.2 }}>
+              Power Mode (×²)
             </div>
-            <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2 }}>
+            <div style={{ fontSize: 10, color: C.t3, marginTop: 2 }}>
               {powerMode ? "Convex payoff: amplified gains & losses" : "Options-like exposure without expiry"}
             </div>
           </div>
-          <button
-            onClick={() => setPowerMode(v => !v)}
-            style={{
-              width: 40, height: 22, borderRadius: 11, border: "none", cursor: "pointer",
-              background: powerMode ? "#7c3aed" : "#30363d", position: "relative",
-              transition: "background 0.2s",
-            }}
-          >
+          <div style={{
+            width: 34, height: 18, borderRadius: 9, position: "relative",
+            background: powerMode ? C.gold : C.border, transition: "background 0.15s",
+            flexShrink: 0,
+          }}>
             <div style={{
-              width: 16, height: 16, borderRadius: 8, background: "#fff",
-              position: "absolute", top: 3,
-              left: powerMode ? 21 : 3, transition: "left 0.2s",
+              width: 14, height: 14, borderRadius: 7, background: powerMode ? "#000" : C.t2,
+              position: "absolute", top: 2,
+              left: powerMode ? 18 : 2, transition: "left 0.15s, background 0.15s",
             }} />
-          </button>
-        </div>
+          </div>
+        </button>
         {powerMode && (
           <div style={{
-            fontSize: 10, color: "#f59e0b", padding: "6px 10px",
-            background: "#1c1507", borderRadius: 6, border: "1px solid #854d0e30",
+            fontSize: 10.5, color: C.gold, padding: "8px 10px",
+            background: C.panel2, borderRadius: 4, border: `1px solid ${C.border}`,
+            lineHeight: 1.45,
           }}>
-            2x spread fee applies. If SOL +10%: Standard +10%, Power +21%.
-            {leverage > 5 && " Max 5x leverage recommended for power perps."}
+            2× spread fee applies. If SOL +10%: standard +10%, power +21%.
+            {leverage > 5 && " Max 5× leverage recommended for power perps."}
           </div>
         )}
 
         {/* Pro mode: Vault risk info */}
         {showProData && vaultRisk && (
           <div style={{
-            display: "flex", gap: 8, fontSize: 11,
-            background: "#161b22", borderRadius: 8, padding: "8px 12px",
-            border: "1px solid #30363d",
+            display: "flex", gap: 10, fontSize: 11,
+            background: C.panel2, borderRadius: 4, padding: "8px 12px",
+            border: `1px solid ${C.border}`, alignItems: "baseline",
           }}>
-            <span style={{ color: "#8b949e" }}>Spread</span>
-            <span style={{ fontFamily: "IBM Plex Mono,monospace", color: vaultRisk.suspended ? "#ff5353" : "#e6edf3" }}>
+            <span style={{ color: C.t3, textTransform: "uppercase", letterSpacing: 0.5, fontSize: 9 }}>Spread</span>
+            <span style={{ fontFamily: MONO, color: vaultRisk.suspended ? C.neg : C.t1 }}>
               {vaultRisk.suspended ? "SUSPENDED" : `${vaultRisk.spreadBps} bps`}
             </span>
-            <span style={{ color: "#30363d" }}>&middot;</span>
-            <span style={{ color: "#8b949e" }}>Skew</span>
-            <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>{vaultRisk.skewPct}%</span>
+            <span style={{ color: C.t3 }}>·</span>
+            <span style={{ color: C.t3, textTransform: "uppercase", letterSpacing: 0.5, fontSize: 9 }}>Skew</span>
+            <span style={{ fontFamily: MONO, color: C.t1 }}>{vaultRisk.skewPct}%</span>
           </div>
         )}
 
         {/* Order summary */}
-        <div style={{ background: "#161b22", borderRadius: 10, padding: "12px 14px", border: "1px solid #30363d" }}>
-          <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Order Summary</div>
-          <div style={{ borderBottom: "1px solid #30363d", paddingBottom: 8, marginBottom: 8 }}>
-            <SummaryRow label="Margin" value={`$${(sol * effectivePrice).toFixed(2)}`} />
+        <div style={{ background: C.panel2, borderRadius: 4, padding: "12px 14px", border: `1px solid ${C.border}` }}>
+          <div style={{ ...labelStyle, marginBottom: 8 }}>Order Summary</div>
+          <div style={{ borderBottom: `1px solid ${C.border}`, paddingBottom: 8, marginBottom: 8 }}>
+            <SummaryRow label="Margin"        value={`$${(sol * effectivePrice).toFixed(2)}`} />
             <SummaryRow label="Position Size" value={`$${summary.notional.toFixed(2)}`} />
-            <SummaryRow label="Entry Price" value={`$${summary.entryPrice.toFixed(2)}`} />
-            <SummaryRow label="Liq. Price" value={`$${summary.liqPrice.toFixed(2)}`} color="#ff5353" />
-            <SummaryRow label="Spread" value={vaultRisk ? `${vaultRisk.spreadBps} bps` : "5 bps"} />
-            <SummaryRow label="Fee (10bps)" value={`$${summary.fee.toFixed(3)}`} />
+            <SummaryRow label="Entry Price"   value={`$${summary.entryPrice.toFixed(2)}`} />
+            <SummaryRow label="Liq. Price"    value={`$${summary.liqPrice.toFixed(2)}`} color={C.neg} />
+            <SummaryRow label="Spread"        value={vaultRisk ? `${vaultRisk.spreadBps} bps` : "5 bps"} />
+            <SummaryRow label="Fee (10 bps)"  value={`$${summary.fee.toFixed(3)}`} />
           </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-            <span style={{ color: "#8b949e" }}>Margin Ratio</span>
-            <span style={{ fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: summary.healthCol }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, alignItems: "baseline" }}>
+            <span style={{ color: C.t2 }}>Margin Ratio</span>
+            <span style={{ fontFamily: MONO, fontWeight: 600, color: summary.healthCol, fontFeatureSettings: "'tnum' 1" }}>
               {(summary.marginRatio * 100).toFixed(1)}%
-              {" "}<span style={{ fontSize: 8 }}>&bull;</span>
             </span>
           </div>
         </div>
@@ -444,21 +460,21 @@ export function TradePanel({
         {/* Confirmation modal */}
         {confirmDesc && (
           <div style={{
-            background: "#161b22", borderRadius: 10, padding: "14px",
-            border: `1px solid ${accent}40`,
+            background: C.panel2, borderRadius: 4, padding: 14,
+            border: `1px solid ${C.borderLit}`,
           }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: "#e6edf3", marginBottom: 8 }}>Confirm Transaction</div>
-            <div style={{ fontSize: 12, color: "#8b949e", marginBottom: 12, lineHeight: 1.5 }}>{confirmDesc}</div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.t1, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.6 }}>Confirm Transaction</div>
+            <div style={{ fontSize: 12, color: C.t2, marginBottom: 12, lineHeight: 1.5 }}>{confirmDesc}</div>
             <div style={{ display: "flex", gap: 8 }}>
               <button onClick={executeOpen} style={{
-                flex: 1, padding: "10px 0", borderRadius: 8, border: "none",
-                background: sideColor, color: "#fff", fontSize: 13,
-                fontWeight: 700, cursor: "pointer",
+                flex: 1, padding: "10px 0", borderRadius: 4, border: 0,
+                background: sideColor, color: "#000", fontSize: 12.5,
+                fontWeight: 600, cursor: "pointer", letterSpacing: 0.2,
               }}>Confirm</button>
               <button onClick={() => setConfirmDesc(null)} style={{
-                flex: 1, padding: "10px 0", borderRadius: 8,
-                border: "1px solid #30363d", background: "transparent",
-                color: "#8b949e", fontSize: 13, cursor: "pointer",
+                flex: 1, padding: "10px 0", borderRadius: 4,
+                border: `1px solid ${C.border}`, background: "transparent",
+                color: C.t2, fontSize: 12.5, cursor: "pointer",
               }}>Cancel</button>
             </div>
           </div>
@@ -467,20 +483,20 @@ export function TradePanel({
         {/* Optimistic confirmation */}
         {optimistic && !confirmDesc && (
           <div style={{
-            background: "#161b22", borderRadius: 10, padding: "14px",
-            border: `1px solid ${accent}40`, textAlign: "center",
+            background: C.panel2, borderRadius: 4, padding: 14,
+            border: `1px solid ${C.border}`, textAlign: "center",
           }}>
             <div style={{
-              width: 8, height: 8, borderRadius: "50%", background: accent,
+              width: 6, height: 6, borderRadius: "50%", background: C.gold,
               margin: "0 auto 8px", animation: "pulse 1.5s infinite",
             }} />
-            <div style={{ fontSize: 13, color: accent, fontWeight: 600, marginBottom: 4 }}>
-              Confirming on Solana...
+            <div style={{ fontSize: 11, color: C.gold, fontWeight: 600, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.6 }}>
+              Confirming on Solana…
             </div>
-            <div style={{ fontSize: 12, fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>
+            <div style={{ fontSize: 12, fontFamily: MONO, color: C.t1 }}>
               {optimistic.side} ${optimistic.value.toFixed(2)}
             </div>
-            <div style={{ fontSize: 11, color: "#8b949e", marginTop: 4 }}>
+            <div style={{ fontSize: 10.5, color: C.t3, marginTop: 4 }}>
               Transaction sent — waiting for block confirmation
             </div>
           </div>
@@ -490,25 +506,25 @@ export function TradePanel({
         {privy.enabled && publicKey && !confirmDesc && !optimistic && (
           <div style={{
             display: "flex", alignItems: "center", justifyContent: "space-between",
-            padding: "8px 12px", background: "#161b22", borderRadius: 8,
-            border: "1px solid #30363d", fontSize: 11,
+            padding: "8px 12px", background: C.panel2, borderRadius: 4,
+            border: `1px solid ${C.border}`, fontSize: 11,
           }}>
             <div>
-              <span style={{ color: "#8b949e" }}>Session Key </span>
+              <span style={{ color: C.t3, textTransform: "uppercase", letterSpacing: 0.5, fontSize: 9, marginRight: 6 }}>Session Key</span>
               {privy.session?.active ? (
-                <span style={{ color: "#3fb68b", fontWeight: 600 }}>
-                  Active ({privy.remainingCap.toFixed(2)} SOL left)
+                <span style={{ color: C.pos, fontWeight: 600, fontFamily: MONO }}>
+                  Active · {privy.remainingCap.toFixed(2)} SOL
                 </span>
               ) : (
-                <span style={{ color: "#8b949e" }}>Off</span>
+                <span style={{ color: C.t3 }}>Off</span>
               )}
             </div>
             <button
               onClick={() => privy.session?.active ? privy.endSession() : privy.startSession(1.0)}
               style={{
-                padding: "3px 10px", borderRadius: 4, border: "1px solid #30363d",
+                padding: "3px 10px", borderRadius: 3, border: `1px solid ${C.border}`,
                 background: "transparent", cursor: "pointer", fontSize: 11,
-                color: privy.session?.active ? "#ff5353" : accent,
+                color: privy.session?.active ? C.neg : C.gold, letterSpacing: 0.4,
               }}
             >{privy.session?.active ? "End" : "Start"}</button>
           </div>
@@ -521,24 +537,32 @@ export function TradePanel({
               disabled={btnDisabled}
               onClick={requestOpen}
               style={{
-                width: "100%", padding: "14px 0", borderRadius: 10, border: "none",
-                background: btnDisabled ? "#21262d" : sideColor,
-                color: btnDisabled ? "#8b949e" : "#fff",
-                fontSize: 15, fontWeight: 700, cursor: btnDisabled ? "not-allowed" : "pointer",
-                letterSpacing: "-0.01em", transition: "opacity 0.15s",
+                width: "100%", padding: "13px 0", borderRadius: 4, border: 0,
+                background: btnDisabled ? C.panel2 : sideColor,
+                color: btnDisabled ? C.t3 : "#000",
+                fontSize: 13.5, fontWeight: 600, cursor: btnDisabled ? "not-allowed" : "pointer",
+                letterSpacing: 0.4, textTransform: "uppercase",
+                transition: "opacity 0.15s",
               }}>
-              {busy ? "Submitting..." : `Open ${side} \u25B8`}
+              {busy ? "Submitting…" : `${side === "Long" ? "Buy" : "Sell"} ${perpMarket}`}
             </button>
-            <div style={{ textAlign: "center", fontSize: 11, color: "#8b949e", marginTop: -6 }}>
-              {!publicKey ? "Connect wallet to trade" : "Perpetual futures — deposit margin, settle PnL on close"}
+            <div style={{ textAlign: "center", fontSize: 10.5, color: C.t3, marginTop: -6, lineHeight: 1.5 }}>
+              {!publicKey ? "Connect wallet to trade" : "Perpetual futures · settles on close"}
             </div>
           </>
         )}
 
         {/* Status */}
         {status && (
-          <div style={{ textAlign: "center", fontSize: 11, color: "#8b949e" }}>{status}</div>
+          <div style={{
+            textAlign: "center", fontSize: 11, color: C.t2,
+            padding: "8px 10px", background: C.panel2, border: `1px solid ${C.border}`,
+            borderRadius: 4, fontFamily: MONO,
+          }}>{status}</div>
         )}
+
+        {/* Subtle gap reference visualization for sideBg (kept since logic-equivalent) */}
+        <div style={{ display: "none", background: sideBg }} />
       </div>
     </div>
   );

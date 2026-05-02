@@ -3,10 +3,13 @@ import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { VaultScene } from "./VaultScene";
+import { GradualDeleverage } from "./GradualDeleverage";
+import { SelfRepayingDemo } from "./SelfRepayingDemo";
+import { PowerPerpScene } from "./PowerPerpScene";
 import "./IntroPage.css";
 
 const asset = (name: string) => `${import.meta.env.BASE_URL}assets/${name}`;
-const PROGRAM_ID = "8s677udBiKHkCNYzGEroenfN23k1vQjqR3JQvHjZcDWg";
+const TWITTER_URL = "https://x.com/idlExchange";
 
 const CHAPTERS = [
   { id: "c1", num: "01", label: "Overture" },
@@ -15,7 +18,7 @@ const CHAPTERS = [
   { id: "c4", num: "04", label: "Proofs" },
   { id: "c5", num: "05", label: "Auction" },
   { id: "c6", num: "06", label: "Surface" },
-  { id: "c7", num: "07", label: "Numbers" },
+  { id: "c7", num: "07", label: "Convexity" },
   { id: "c8", num: "08", label: "Threshold" },
 ];
 
@@ -43,6 +46,8 @@ interface IntroPageProps { onEnter: () => void; }
 export const IntroPage: FC<IntroPageProps> = ({ onEnter }) => {
   const sceneCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const phoneCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const heroVideoARef = useRef<HTMLVideoElement | null>(null);
+  const heroVideoBRef = useRef<HTMLVideoElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const trackerRef = useRef<HTMLElement | null>(null);
   const startedRef = useRef(false);
@@ -93,6 +98,42 @@ export const IntroPage: FC<IntroPageProps> = ({ onEnter }) => {
       idleTimer = setTimeout(() => tracker.classList.remove("is-scrolling"), 220);
     };
     window.addEventListener("scroll", onScrollTracker, { passive: true });
+
+    /* ── Hero video: two stacked clips offset by half the duration.
+       Opacity is driven from actual currentTime each frame, so the
+       crossfade always lands exactly on the loop seam regardless of
+       buffering, decode hiccups, or metadata-load delay. ── */
+    const videoA = heroVideoARef.current;
+    const videoB = heroVideoBRef.current;
+    let videoRaf = 0;
+    const FADE = 0.55; // seconds of crossfade window around each seam
+
+    const startVideos = () => {
+      if (!videoA || !videoB || !videoA.duration) return;
+      const dur = videoA.duration;
+      try { videoB.currentTime = dur / 2; } catch {}
+      videoA.play().catch(() => {});
+      videoB.play().catch(() => {});
+    };
+
+    const fadeFor = (t: number, dur: number) => {
+      const dist = Math.min(t, dur - t);
+      return Math.max(0, Math.min(1, dist / FADE));
+    };
+
+    const videoTick = () => {
+      videoRaf = requestAnimationFrame(videoTick);
+      if (!videoA || !videoB || !videoA.duration) return;
+      const dur = videoA.duration;
+      videoA.style.opacity = String(fadeFor(videoA.currentTime, dur));
+      videoB.style.opacity = String(fadeFor(videoB.currentTime, dur));
+    };
+
+    if (videoA && videoB) {
+      if (videoA.readyState >= 1) startVideos();
+      else videoA.addEventListener("loadedmetadata", startVideos, { once: true });
+      videoTick();
+    }
 
     /* ── Shared scene: brand title ─────────────────────────── */
     const renderer = new THREE.WebGLRenderer({
@@ -341,6 +382,7 @@ export const IntroPage: FC<IntroPageProps> = ({ onEnter }) => {
       window.clearInterval(slideInterval);
       cancelAnimationFrame(sceneRaf);
       cancelAnimationFrame(phoneRaf);
+      cancelAnimationFrame(videoRaf);
       screens.forEach((tex) => tex.dispose());
       renderer.dispose();
       pRenderer.dispose();
@@ -378,6 +420,28 @@ export const IntroPage: FC<IntroPageProps> = ({ onEnter }) => {
       <main className="story">
         {/* ═ 01 · OVERTURE ═══════════════════════════════════════ */}
         <section id="c1" className="chapter c-overture" data-chapter="1">
+          <video
+            ref={heroVideoARef}
+            className="hero-video hero-video-a"
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="auto"
+            aria-hidden="true"
+            src={encodeURI(asset("15690300-hd_1920_1080_30fps (1).mp4"))}
+          />
+          <video
+            ref={heroVideoBRef}
+            className="hero-video hero-video-b"
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="auto"
+            aria-hidden="true"
+            src={encodeURI(asset("15690300-hd_1920_1080_30fps (1).mp4"))}
+          />
           <canvas id="scene-canvas" className="scene-canvas" aria-hidden="true" ref={sceneCanvasRef} />
           <div className="corner corner-tl">{cornerSvg}</div>
           <div className="corner corner-tr">{cornerSvg}</div>
@@ -424,35 +488,50 @@ export const IntroPage: FC<IntroPageProps> = ({ onEnter }) => {
         {/* ═ 02 · PREMISE ═══════════════════════════════════════ */}
         <section id="c2" className="chapter c-premise" data-chapter="2">
           <div className="chapter-inner">
+            <aside className="premise-epigraph fade-up d1">
+              <div className="premise-quote-mark">"</div>
+              <p>
+                Tiny numerical errors becoming material under adversarially engineered conditions. Treat
+                runtime enforcement of mathematical invariants as a first-class design requirement, not
+                a post-hoc audit task.
+              </p>
+              <cite>— a16z crypto, on the Balancer V2 exploit · Nov 2025</cite>
+            </aside>
+
             <div className="grid-2">
               <div>
-                <div className="kicker fade-up d1"><span className="kicker-num">02 ·</span>The premise</div>
-                <h2 className="display display-l fade-up d2">
+                <div className="kicker fade-up d2"><span className="kicker-num">02 ·</span>The premise</div>
+                <h2 className="display display-l fade-up d3">
                   Solana perps haven't<br />moved in <span className="em">a decade</span>.
                 </h2>
-                <p className="lede fade-up d3">
-                  Capital sits idle while the same asset earns yield elsewhere. A wick liquidates an intact
-                  position. Correlated legs are margined as if traded on separate exchanges. <em>Convex
-                  exposure</em> doesn't exist on-chain. Each gap is a known problem with a known solution
-                  in traditional finance — none had been brought on-chain in verified, production form.
+                <p className="lede fade-up d4">
+                  Each gap below is a known problem with a known solution in traditional finance — none
+                  had been brought on-chain in verified, production form.
                 </p>
-                <ul className="failure-list fade-up d4">
-                  <li><span className="fnum">01 ·</span><span><strong>Dead collateral.</strong>~$4B of idle margin across Solana perps. JLP pays 20%+. mSOL pays 7%+. The opportunity cost leaks away.</span></li>
-                  <li><span className="fnum">02 ·</span><span><strong>Binary liquidation.</strong>A 30-second wick wipes a fully-collateralized position and assesses a ~5% penalty.</span></li>
-                  <li><span className="fnum">03 ·</span><span><strong>No risk offset.</strong>Long SOL, short ETH — 70% correlated. Margined in isolation. SPAN has existed since 1988.</span></li>
-                  <li><span className="fnum">04 ·</span><span><strong>No convex payoff.</strong>Linear perps only. Power perpetuals introduced in 2021. Solana had no equivalent.</span></li>
-                </ul>
               </div>
 
-              <aside className="premise-quote fade-up d4">
-                <div className="premise-quote-mark">"</div>
-                <p>
-                  Tiny numerical errors becoming material under adversarially engineered conditions. Treat
-                  runtime enforcement of mathematical invariants as a first-class design requirement, not
-                  a post-hoc audit task.
-                </p>
-                <cite>— a16z crypto, on the Balancer V2 exploit · Nov 2025</cite>
-              </aside>
+              <ul className="failure-list fade-up d3">
+                <li><span className="fnum">01 ·</span><span><strong>Dead collateral.</strong>~$4B of idle margin across Solana perps. JLP pays 20%+. mSOL pays 7%+. The opportunity cost leaks away.</span></li>
+                <li><span className="fnum">02 ·</span><span><strong>Binary liquidation.</strong>A 30-second wick wipes a fully-collateralized position and assesses a ~5% penalty.</span></li>
+                <li><span className="fnum">03 ·</span><span><strong>No risk offset.</strong>Long SOL, short ETH — 70% correlated. Margined in isolation. SPAN has existed since 1988.</span></li>
+                <li><span className="fnum">04 ·</span><span><strong>No convex payoff.</strong>Linear perps only. Power perpetuals introduced in 2021. Solana had no equivalent.</span></li>
+              </ul>
+            </div>
+
+            <div className="premise-demo fade-up d5">
+              <div className="premise-demo-eyebrow">
+                <span>Live · 13.5 s loop</span>
+                <span>02 · Binary liquidation vs. gradual deleverage</span>
+              </div>
+              <GradualDeleverage />
+            </div>
+
+            <div className="premise-demo fade-up d5">
+              <div className="premise-demo-eyebrow">
+                <span>Live · 18 s loop</span>
+                <span>01 · Dead collateral vs. self-repaying perpetual</span>
+              </div>
+              <SelfRepayingDemo />
             </div>
           </div>
         </section>
@@ -657,39 +736,21 @@ export const IntroPage: FC<IntroPageProps> = ({ onEnter }) => {
           </div>
         </section>
 
-        {/* ═ 07 · NUMBERS ═══════════════════════════════════════ */}
-        <section id="c7" className="chapter c-numbers" data-chapter="7">
+        {/* ═ 07 · CONVEXITY ═════════════════════════════════════ */}
+        <section id="c7" className="chapter c-convexity" data-chapter="7">
           <div className="chapter-inner">
-            <div className="kicker fade-up d1"><span className="kicker-num">07 ·</span>The numbers</div>
+            <div className="kicker fade-up d1"><span className="kicker-num">07 ·</span>The convexity</div>
             <h2 className="display display-l fade-up d2">
-              Verified, on-chain,<br /><span className="em">to the comma</span>.
+              <span className="em">Linear</span> is a choice,<br />not a law.
             </h2>
             <p className="lede fade-up d3">
-              Not metrics that drift with the tape — invariants that hold across every state transition.
-              Each one is mechanically checked before any line of execution code is allowed to ship.
+              A standard perp pays one dollar per dollar of price movement. A power perpetual squares the
+              move — <em>convex by construction</em>, gamma without strikes, leverage without
+              liquidation cliffs.
             </p>
 
-            <div className="numbers-table fade-up d4">
-              <div className="numbers-cell">
-                <div className="numbers-cell-label">Lean theorems</div>
-                <div className="numbers-cell-value">18 / 18</div>
-                <div className="numbers-cell-foot">machine-checked · zero <code>sorry</code></div>
-              </div>
-              <div className="numbers-cell">
-                <div className="numbers-cell-label">Liquidation tiers</div>
-                <div className="numbers-cell-value">4</div>
-                <div className="numbers-cell-foot">25% · 50% · 75% · full at 2% margin</div>
-              </div>
-              <div className="numbers-cell">
-                <div className="numbers-cell-label">Margin scenarios</div>
-                <div className="numbers-cell-value">15</div>
-                <div className="numbers-cell-foot">SPAN-style portfolio engine</div>
-              </div>
-              <div className="numbers-cell">
-                <div className="numbers-cell-label">Markets · live</div>
-                <div className="numbers-cell-value">3</div>
-                <div className="numbers-cell-foot">SOL · BTC · ETH · perp + power</div>
-              </div>
+            <div className="convexity-stage fade-up d4">
+              <PowerPerpScene />
             </div>
           </div>
         </section>
@@ -715,7 +776,14 @@ export const IntroPage: FC<IntroPageProps> = ({ onEnter }) => {
             <div className="footnote fade-up d6">
               <div>© IDLExchange · 2026</div>
               <div className="center">— Perpetuals, proven —</div>
-              <div className="right">{PROGRAM_ID}</div>
+              <div className="right">
+                <a className="footnote-x" href={TWITTER_URL} target="_blank" rel="noopener noreferrer" aria-label="Follow IDLExchange on X">
+                  <svg viewBox="0 0 1200 1227" width="14" height="14" aria-hidden="true">
+                    <path fill="currentColor" d="M714.163 519.284 1160.89 0h-105.86L667.137 450.887 357.328 0H0l468.492 681.821L0 1226.37h105.866l409.625-476.152 327.181 476.152H1200L714.137 519.284h.026ZM569.165 687.828l-47.468-67.894L144.011 79.694h162.604l304.797 435.991 47.468 67.894 396.2 566.721H892.476L569.165 687.854v-.026Z"/>
+                  </svg>
+                  <span>@idlExchange</span>
+                </a>
+              </div>
             </div>
           </div>
         </section>
