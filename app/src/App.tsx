@@ -13,6 +13,7 @@ import { DFBAView } from "./components/DFBAView";
 import { PortfolioView } from "./components/PortfolioView";
 import { SimplePanel } from "./components/SimplePanel";
 import { TweaksPanel, Tweaks } from "./components/TweaksPanel";
+import { useTradeHistory } from "./hooks/useTradeHistory";
 
 const NAV_ITEMS = ["Trade", "DFBA", "Portfolio"] as const;
 type Page = "intro" | (typeof NAV_ITEMS)[number];
@@ -63,8 +64,10 @@ export const App: FC = () => {
   const oracle = useOracle();
   const oraclePrices = useOraclePrices(["sol", "btc", "eth"]);
   const { positions } = usePositions();
-  const funding = useFundingRate();
+  const fundingKey = activeMarket === "BTC-USD" ? "btc" : activeMarket === "ETH-USD" ? "eth" : "sol";
+  const funding = useFundingRate(fundingKey);
   const tickers = useTickers();
+  const tradeHistory = useTradeHistory();
   const { publicKey, disconnect } = useWallet();
   const { setVisible } = useWalletModal();
 
@@ -223,6 +226,7 @@ export const App: FC = () => {
               positions={positions}
               prices={oraclePrices}
               solPrice={solPrice}
+              tradeHistory={tradeHistory}
             />
           )}
         </>

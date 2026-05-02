@@ -28,11 +28,13 @@ pub struct AtomicOpenParams {
     pub spread_fee_bps: u16,
     pub collateral_type: u8,     // 0=SOL, 1=JLP, 2=mSOL
     pub collateral_price_6dp: u64, // JLP/mSOL price; 0 = use oracle
+    pub power_milli: u64,        // 1000=standard, 2000=squeeth; 0 treated as 1000
 }
 
 impl AtomicOpenParams {
     fn deserialize(data: &[u8]) -> Option<Self> {
-        // u64(8) + u8(1) + u64(8) + u16(2) + u8(1) + u64(8) = 28 bytes
+        // u64(8) + u8(1) + u64(8) + u16(2) + u8(1) + u64(8) = 28 bytes base
+        // + optional u16(2) power_milli = 30 bytes
         if data.len() < 28 { return None; }
         let mut o = 0;
         let u = |d: &[u8], o: &mut usize| -> u64 {
@@ -45,7 +47,14 @@ impl AtomicOpenParams {
         let collateral_type = data[o]; o += 1;
         let collateral_price_6dp = u(data, &mut o);
 
-        Some(Self { collateral_amount, perp_side, leverage_bps, spread_fee_bps, collateral_type, collateral_price_6dp })
+        // Optional power_milli (2 bytes, u16). Default: 1000 (standard perp).
+        let power_milli: u64 = if data.len() >= 30 {
+            u16::from_le_bytes(data[o..o+2].try_into().unwrap()) as u64
+        } else {
+            1_000
+        };
+
+        Some(Self { collateral_amount, perp_side, leverage_bps, spread_fee_bps, collateral_type, collateral_price_6dp, power_milli })
     }
 }
 
@@ -123,19 +132,47 @@ pub fn process(
     // -------- 1c. Directional skew check (M-2) — blocks only skew-increasing fills >90% --------
     check_vault_skew(config.total_long_oi, config.total_short_oi, &params.perp_side)?;
 
-    // -------- 1d. Spread fee enforcement — caller must pay at least the min spread --------
+    // -------- 1d. Power perp validation --------
+    let power = if params.power_milli == 0 { 1_000u64 } else { params.power_milli };
+    ensure!(
+        power == 1_000 || power == 2_000 || power == 500,
+        AtomicPerpsError::BadInput
+    );
+
+    // -------- 1e. Spread fee enforcement — caller must pay at least the min spread --------
     let min_spread = calculate_min_spread(config.total_long_oi, config.total_short_oi);
+    // Base spread must meet minimum BEFORE power doubling (prevents half-rate gaming)
     ensure!(params.spread_fee_bps >= min_spread, AtomicPerpsError::BadInput);
+    // Power perps pay a convexity premium: 2x spread for squeeth
+    let effective_spread = if power == 2_000 {
+        params.spread_fee_bps.saturating_mul(2)
+    } else {
+        params.spread_fee_bps
+    };
 
     // -------- 2. Oracle --------
     let clock = Clock::get()?;
-    let (sol_price_6dp, _conf) = validate_and_get_price(pyth_price_feed, &clock)?;
+    let (market_price_6dp, _conf) = validate_and_get_price(pyth_price_feed, &clock)?;
+
+    // For non-SOL markets, we need the SOL price separately for:
+    //   - SOL collateral valuation (SOL != BTC/ETH)
+    //   - mSOL sanity check (mSOL ≈ SOL, not BTC/ETH)
+    let is_sol_market = *pyth_price_feed.key == PYTH_SOL_FEED;
+    let sol_price_6dp = if is_sol_market {
+        market_price_6dp
+    } else {
+        // Non-SOL market: SOL oracle is required as additional account (index 10)
+        let sol_oracle = next_account_info(iter)?;
+        ensure!(*sol_oracle.key == PYTH_SOL_FEED, AtomicPerpsError::InvalidOracleFeed);
+        let (p, _) = validate_and_get_price(sol_oracle, &clock)?;
+        p
+    };
 
     // Get collateral price (may differ from SOL for JLP/mSOL)
     let collateral_price_6dp = match params.collateral_type {
-        0 => sol_price_6dp,
+        0 => sol_price_6dp,  // SOL collateral always valued at SOL price
         1 => {
-            validate_jlp_price(params.collateral_price_6dp, sol_price_6dp)?;
+            validate_jlp_price(params.collateral_price_6dp)?;
             params.collateral_price_6dp
         }
         2 => {
@@ -153,10 +190,11 @@ pub fn process(
     let notional_usd = calculate_notional(raw_collateral_usd, params.leverage_bps)?;
 
     // Fee: charged on notional, converted to collateral tokens
-    let total_fee_bps = config.protocol_fee_bps.saturating_add(params.spread_fee_bps as u64);
+    let total_fee_bps = config.protocol_fee_bps.saturating_add(effective_spread as u64);
     let fee_usd = checked_mul_div(notional_usd, total_fee_bps, BPS_DENOMINATOR)?;
     let pow = 10u64.checked_pow(coll_decimals as u32).ok_or(AtomicPerpsError::MathOverflow)?;
-    let fee_in_collateral = checked_mul_div(fee_usd, pow, collateral_price_6dp.max(1))?;
+    ensure!(collateral_price_6dp > 0, AtomicPerpsError::BadInput);
+    let fee_in_collateral = checked_mul_div(fee_usd, pow, collateral_price_6dp)?;
 
     // Net collateral after fee
     let net_collateral = params.collateral_amount
@@ -239,9 +277,9 @@ pub fn process(
         borrow_amount_usdc: notional_usd,  // REPURPOSED: stores notional size in USD 6dp
         perp_side: params.perp_side,
         perp_size: notional_usd,
-        entry_price: sol_price_6dp,
+        entry_price: market_price_6dp,
         opened_at: now,
-        hedge_amount: 0,
+        power_milli: power,
         collateral_entry_price: collateral_price_6dp,
         is_open: true,
         bump: position_bump,

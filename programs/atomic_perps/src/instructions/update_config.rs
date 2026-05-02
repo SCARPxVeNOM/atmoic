@@ -5,9 +5,10 @@ use solana_program::{
     pubkey::Pubkey,
 };
 use crate::errors::AtomicPerpsError;
-use crate::constants::CONFIG_SEED;
+use crate::constants::{CONFIG_SEED, BPS_DENOMINATOR};
 use crate::ensure;
 use crate::utils::account::{load_config, save_config};
+use crate::events::emit_config_updated;
 
 const NO_CHANGE_U64: u64 = u64::MAX;
 
@@ -46,9 +47,21 @@ pub fn process(
 
     if new_authority != Pubkey::default() { config.authority = new_authority; }
     if new_fee_recipient != Pubkey::default() { config.fee_recipient = new_fee_recipient; }
-    if new_fee_bps != NO_CHANGE_U64 { config.protocol_fee_bps = new_fee_bps; }
-    if new_leverage != NO_CHANGE_U64 { config.max_leverage = new_leverage; }
-    if new_liq_threshold != NO_CHANGE_U64 { config.liquidation_threshold = new_liq_threshold; }
+    if new_fee_bps != NO_CHANGE_U64 {
+        // Cap protocol fee at 5% (500 bps) to prevent fee-based collateral drain
+        ensure!(new_fee_bps <= 500, AtomicPerpsError::BadInput);
+        config.protocol_fee_bps = new_fee_bps;
+    }
+    if new_leverage != NO_CHANGE_U64 {
+        // Leverage must be 1x-50x (1000-50000 bps)
+        ensure!(new_leverage >= 1_000 && new_leverage <= 50_000, AtomicPerpsError::BadInput);
+        config.max_leverage = new_leverage;
+    }
+    if new_liq_threshold != NO_CHANGE_U64 {
+        // Liquidation threshold must be 1-100% (100-10000 bps)
+        ensure!(new_liq_threshold >= 100 && new_liq_threshold <= BPS_DENOMINATOR, AtomicPerpsError::BadInput);
+        config.liquidation_threshold = new_liq_threshold;
+    }
     if new_max_tvl != NO_CHANGE_U64 { config.max_tvl = new_max_tvl; }
     if new_paused != 255 { config.is_paused = new_paused != 0; }
 
@@ -80,5 +93,13 @@ pub fn process(
     }
 
     save_config(global_config_ai, &config)?;
+
+    emit_config_updated(
+        &config.authority,
+        config.protocol_fee_bps,
+        config.max_leverage,
+        config.max_tvl,
+    );
+
     Ok(())
 }

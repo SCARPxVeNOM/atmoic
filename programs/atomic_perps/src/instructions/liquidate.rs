@@ -28,7 +28,7 @@ use crate::constants::*;
 use crate::ensure;
 use crate::utils::oracle::{validate_and_get_price, validate_jlp_price};
 use crate::utils::math::{
-    apply_haircut, calculate_pnl, checked_mul_div,
+    apply_haircut, checked_mul_div,
     get_decimals_for_mint, get_haircut_for_mint, token_to_usd,
 };
 use crate::utils::token::{spl_transfer_signed, read_token_owner};
@@ -71,6 +71,13 @@ pub fn process(
 
     let mut position = load_position(position_ai)?;
 
+    // Verify position PDA before using any position data
+    let (expected_pos_pda, _) = Pubkey::find_program_address(
+        &[POSITION_SEED, position.owner.as_ref(), pyth_price_feed.key.as_ref()],
+        program_id,
+    );
+    ensure!(*position_ai.key == expected_pos_pda, AtomicPerpsError::BadInput);
+
     ensure!(position.is_open, AtomicPerpsError::PositionNotOpen);
     ensure!(crate::constants::is_allowed_feed(pyth_price_feed.key), AtomicPerpsError::InvalidOracleFeed);
     ensure!(*pyth_price_feed.key == position.perp_market, AtomicPerpsError::InvalidOracleFeed);
@@ -87,13 +94,6 @@ pub fn process(
     };
     ensure!(*collateral_vault.key == expected_vault, AtomicPerpsError::BadInput);
 
-    // Verify position PDA
-    let (expected_pos_pda, _) = Pubkey::find_program_address(
-        &[POSITION_SEED, position.owner.as_ref(), pyth_price_feed.key.as_ref()],
-        program_id,
-    );
-    ensure!(*position_ai.key == expected_pos_pda, AtomicPerpsError::BadInput);
-
     let coll_decimals = get_decimals_for_mint(&coll_mint);
     let haircut_bps = get_haircut_for_mint(&coll_mint);
     let collateral_amount = position.collateral_amount;
@@ -102,15 +102,26 @@ pub fn process(
     let clock = Clock::get()?;
     let (current_price, _conf) = validate_and_get_price(pyth_price_feed, &clock)?;
 
+    // For non-SOL markets, get SOL price from optional extra account
+    let is_sol_market = *pyth_price_feed.key == PYTH_SOL_FEED;
+    let sol_price = if is_sol_market {
+        current_price
+    } else {
+        let sol_oracle = next_account_info(iter)?;
+        ensure!(*sol_oracle.key == PYTH_SOL_FEED, AtomicPerpsError::InvalidOracleFeed);
+        let (p, _) = validate_and_get_price(sol_oracle, &clock)?;
+        p
+    };
+
     // Get collateral price
     let collateral_price = if coll_mint == config.jlp_mint {
-        validate_jlp_price(params.collateral_price_6dp, current_price)?;
+        validate_jlp_price(params.collateral_price_6dp)?;
         params.collateral_price_6dp
     } else if coll_mint == config.msol_mint {
-        crate::utils::oracle::validate_msol_price(params.collateral_price_6dp, current_price)?;
+        crate::utils::oracle::validate_msol_price(params.collateral_price_6dp, sol_price)?;
         params.collateral_price_6dp
     } else {
-        current_price
+        sol_price  // SOL collateral valued at SOL price, not market price
     };
 
     // -------- JLP grace period: cannot liquidate within 2h of opening --------
@@ -118,6 +129,8 @@ pub fn process(
         let age = clock.unix_timestamp.saturating_sub(position.opened_at);
         ensure!(age >= JLP_LIQUIDATION_GRACE_SECONDS, AtomicPerpsError::LiquidationGracePeriod);
     }
+
+    ensure!(collateral_price > 0, AtomicPerpsError::BadInput);
 
     // -------- 2. Margin-based health check --------
     // For JLP: use max(entry_price, current_price) per A-04 — yield can only help
@@ -131,15 +144,16 @@ pub fn process(
         .checked_pow(coll_decimals as u32)
         .ok_or(AtomicPerpsError::MathOverflow)?;
 
-    // Compute unrealized PnL
-    let pnl = calculate_pnl(position.entry_price, current_price, position.perp_size, &position.perp_side)?;
+    // Compute unrealized PnL (power-aware)
+    let power = position.power_milli;
+    let pnl = crate::utils::math::calculate_pnl_power(position.entry_price, current_price, position.perp_size, &position.perp_side, power)?;
 
     // Effective collateral = collateral +/- PnL (in collateral token units)
     let effective_coll = if pnl >= 0 {
-        let pnl_coll = checked_mul_div(pnl as u64, pow, collateral_price.max(1))?;
+        let pnl_coll = checked_mul_div(pnl as u64, pow, collateral_price)?;
         collateral_amount.saturating_add(pnl_coll)
     } else {
-        let loss_coll = checked_mul_div((-pnl) as u64, pow, collateral_price.max(1))?;
+        let loss_coll = checked_mul_div((-pnl) as u64, pow, collateral_price)?;
         collateral_amount.saturating_sub(loss_coll)
     };
 
@@ -160,9 +174,27 @@ pub fn process(
     // Position must be below maintenance margin to be liquidatable
     ensure!(margin_ratio < MAINTENANCE_MARGIN_BPS, AtomicPerpsError::PositionHealthy);
 
-    // -------- 3. Split collateral --------
-    let bonus_amount = checked_mul_div(collateral_amount, LIQUIDATION_BONUS_BPS, BPS_DENOMINATOR)?;
-    let remainder = collateral_amount.saturating_sub(bonus_amount);
+    // -------- 3. Gradual deleveraging — close percentage based on severity --------
+    let close_bps: u64 = if margin_ratio < DELEVERAGE_ZONE_3_BPS {
+        // Below 2%: full liquidation
+        BPS_DENOMINATOR
+    } else if margin_ratio < DELEVERAGE_ZONE_2_BPS {
+        // 2-3%: close 75%
+        7_500
+    } else if margin_ratio < DELEVERAGE_ZONE_1_BPS {
+        // 3-4%: close 50%
+        5_000
+    } else {
+        // 4-5%: close 25%
+        2_500
+    };
+
+    let closing_collateral = checked_mul_div(collateral_amount, close_bps, BPS_DENOMINATOR)?;
+    let closing_size = checked_mul_div(position.perp_size, close_bps, BPS_DENOMINATOR)?;
+
+    // Liquidator bonus on closed portion only
+    let bonus_amount = checked_mul_div(closing_collateral, LIQUIDATION_BONUS_BPS, BPS_DENOMINATOR)?;
+    let remainder = closing_collateral.saturating_sub(bonus_amount);
 
     let authority_bump = config.program_authority_bump;
     let authority_seeds: &[&[u8]] = &[AUTHORITY_SEED, &[authority_bump]];
@@ -180,22 +212,23 @@ pub fn process(
         &position.owner,
         liquidator.key,
         margin_ratio,
-        collateral_amount,
+        closing_collateral,
+        close_bps,
     );
 
-    // Decrement collateral tracking
-    let deposit_usd = token_to_usd(collateral_amount, position.collateral_entry_price, coll_decimals).unwrap_or(0);
-    config.total_collateral = config.total_collateral.saturating_sub(deposit_usd);
+    // Decrement collateral tracking for closed portion
+    let closing_usd = token_to_usd(closing_collateral, position.collateral_entry_price, coll_decimals).unwrap_or(0);
+    config.total_collateral = config.total_collateral.saturating_sub(closing_usd);
     if is_correlated {
-        config.total_correlated_collateral = config.total_correlated_collateral.saturating_sub(deposit_usd);
+        config.total_correlated_collateral = config.total_correlated_collateral.saturating_sub(closing_usd);
     }
 
     match position.perp_side {
         crate::state::Side::Long => {
-            config.total_long_oi = config.total_long_oi.saturating_sub(position.perp_size);
+            config.total_long_oi = config.total_long_oi.saturating_sub(closing_size);
         }
         crate::state::Side::Short => {
-            config.total_short_oi = config.total_short_oi.saturating_sub(position.perp_size);
+            config.total_short_oi = config.total_short_oi.saturating_sub(closing_size);
         }
     }
 
@@ -207,10 +240,71 @@ pub fn process(
 
     save_config(global_config_ai, &config)?;
 
-    position.is_open = false;
-    position.collateral_amount = 0;
-    position.borrow_amount_usdc = 0;
-    position.perp_size = 0;
+    if close_bps >= BPS_DENOMINATOR {
+        // Full liquidation — zero out position
+        position.is_open = false;
+        position.collateral_amount = 0;
+        position.borrow_amount_usdc = 0;
+        position.perp_size = 0;
+    } else {
+        // Partial deleverage — reduce position proportionally, keep open
+        position.collateral_amount = position.collateral_amount.saturating_sub(closing_collateral);
+        position.perp_size = position.perp_size.saturating_sub(closing_size);
+        position.borrow_amount_usdc = position.perp_size; // notional = size
+
+        // Post-deleverage health check: if remaining position is still below
+        // maintenance margin, escalate to full liquidation to prevent zombie positions
+        if position.perp_size > 0 {
+            let remaining_pnl = crate::utils::math::calculate_pnl_power(
+                position.entry_price, current_price, position.perp_size, &position.perp_side, power,
+            )?;
+            let remaining_eff_coll = if remaining_pnl >= 0 {
+                let pnl_coll = checked_mul_div(remaining_pnl as u64, pow, collateral_price)?;
+                position.collateral_amount.saturating_add(pnl_coll)
+            } else {
+                let loss_coll = checked_mul_div((-remaining_pnl) as u64, pow, collateral_price)?;
+                position.collateral_amount.saturating_sub(loss_coll)
+            };
+            let remaining_margin_usd = apply_haircut(
+                token_to_usd(remaining_eff_coll, health_price, coll_decimals)?,
+                haircut_bps,
+            )?;
+            let remaining_ratio = if position.perp_size == 0 { u64::MAX } else {
+                checked_mul_div(remaining_margin_usd, BPS_DENOMINATOR, position.perp_size)?
+            };
+            if remaining_ratio < MAINTENANCE_MARGIN_BPS {
+                // Still underwater after partial close — escalate to full liquidation
+                // Return remaining collateral minus bonus to fee_recipient
+                let leftover = position.collateral_amount;
+                let leftover_bonus = checked_mul_div(leftover, LIQUIDATION_BONUS_BPS, BPS_DENOMINATOR)?;
+                let leftover_remainder = leftover.saturating_sub(leftover_bonus);
+                if leftover_bonus > 0 {
+                    spl_transfer_signed(token_program, collateral_vault, liquidator_collateral_account, program_authority, leftover_bonus, signer_seeds)?;
+                }
+                if leftover_remainder > 0 {
+                    spl_transfer_signed(token_program, collateral_vault, fee_recipient_collateral_account, program_authority, leftover_remainder, signer_seeds)?;
+                }
+                // Update OI for remaining portion
+                let remaining_size = position.perp_size;
+                match position.perp_side {
+                    crate::state::Side::Long => config.total_long_oi = config.total_long_oi.saturating_sub(remaining_size),
+                    crate::state::Side::Short => config.total_short_oi = config.total_short_oi.saturating_sub(remaining_size),
+                }
+                let remaining_usd = token_to_usd(leftover, position.collateral_entry_price, coll_decimals).unwrap_or(0);
+                config.total_collateral = config.total_collateral.saturating_sub(remaining_usd);
+                if is_correlated {
+                    config.total_correlated_collateral = config.total_correlated_collateral.saturating_sub(remaining_usd);
+                }
+                save_config(global_config_ai, &config)?;
+                position.is_open = false;
+                position.collateral_amount = 0;
+                position.borrow_amount_usdc = 0;
+                position.perp_size = 0;
+                save_position(position_ai, &position)?;
+                return Ok(());
+            }
+        }
+    }
     save_position(position_ai, &position)?;
 
     Ok(())

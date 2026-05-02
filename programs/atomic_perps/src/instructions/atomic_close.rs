@@ -11,7 +11,7 @@ use crate::constants::*;
 use crate::constants::is_allowed_feed;
 use crate::ensure;
 use crate::utils::oracle::{validate_and_get_price, validate_jlp_price, validate_msol_price};
-use crate::utils::math::{calculate_pnl, checked_mul_div, get_decimals_for_mint, token_to_usd, apply_haircut};
+use crate::utils::math::{checked_mul_div, get_decimals_for_mint, token_to_usd, apply_haircut};
 use crate::utils::token::{spl_transfer_signed, read_token_amount, read_token_owner};
 use crate::utils::account::{load_config, save_config, load_position, save_position};
 use crate::events::emit_position_closed;
@@ -105,15 +105,26 @@ pub fn process(
     let clock = Clock::get()?;
     let (exit_price, _conf) = validate_and_get_price(pyth_price_feed, &clock)?;
 
+    // For non-SOL markets, get SOL price from optional extra account
+    let is_sol_market = *pyth_price_feed.key == PYTH_SOL_FEED;
+    let sol_price = if is_sol_market {
+        exit_price
+    } else {
+        let sol_oracle = next_account_info(iter)?;
+        ensure!(*sol_oracle.key == PYTH_SOL_FEED, AtomicPerpsError::InvalidOracleFeed);
+        let (p, _) = validate_and_get_price(sol_oracle, &clock)?;
+        p
+    };
+
     // Get collateral price for settlement
     let collateral_price = if coll_mint == config.jlp_mint {
-        validate_jlp_price(params.collateral_price_6dp, exit_price)?;
+        validate_jlp_price(params.collateral_price_6dp)?;
         params.collateral_price_6dp
     } else if coll_mint == config.msol_mint {
-        validate_msol_price(params.collateral_price_6dp, exit_price)?;
+        validate_msol_price(params.collateral_price_6dp, sol_price)?;
         params.collateral_price_6dp
     } else {
-        exit_price
+        sol_price  // SOL collateral valued at SOL price, not market price
     };
 
     // -------- 2. Scale closing portion --------
@@ -125,16 +136,19 @@ pub fn process(
         .checked_pow(coll_decimals as u32)
         .ok_or(AtomicPerpsError::MathOverflow)?;
 
-    // -------- 3. PnL on closing portion --------
-    let pnl = calculate_pnl(entry_price, exit_price, closing_size, &perp_side)?;
+    ensure!(collateral_price > 0, AtomicPerpsError::BadInput);
+
+    // -------- 3. PnL on closing portion (power-aware) --------
+    let power = position.power_milli;
+    let pnl = crate::utils::math::calculate_pnl_power(entry_price, exit_price, closing_size, &perp_side, power)?;
 
     let pnl_in_collateral_abs: u64 = if pnl == 0 { 0 } else {
-        checked_mul_div(pnl.unsigned_abs(), pow, collateral_price.max(1))?
+        checked_mul_div(pnl.unsigned_abs(), pow, collateral_price)?
     };
 
     // -------- 4. Close fee (on closing notional) --------
     let fee_usd = checked_mul_div(closing_size, config.protocol_fee_bps, BPS_DENOMINATOR)?;
-    let fee_in_collateral = checked_mul_div(fee_usd, pow, collateral_price.max(1))?;
+    let fee_in_collateral = checked_mul_div(fee_usd, pow, collateral_price)?;
 
     // -------- 5. Settlement: closing_collateral - fee +/- PnL --------
     let mut collateral_to_return = closing_collateral.saturating_sub(fee_in_collateral);
@@ -152,13 +166,17 @@ pub fn process(
     let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
 
     // -------- 6. Fee transfer: vault -> fee_recipient (90%) + PSF accrual (10%) --------
-    let psf_portion_coll = fee_in_collateral / 10;
-    let recipient_fee_coll = fee_in_collateral.saturating_sub(psf_portion_coll);
+    // Cap fee at vault balance to prevent overdraw under concurrent closes
+    let vault_balance_before = read_token_amount(collateral_vault)?;
+    let capped_fee = fee_in_collateral.min(vault_balance_before);
+    let psf_portion_coll = capped_fee / 10;
+    let recipient_fee_coll = capped_fee.saturating_sub(psf_portion_coll);
     if recipient_fee_coll > 0 {
         spl_transfer_signed(token_program, collateral_vault, fee_recipient_account, program_authority, recipient_fee_coll, signer_seeds)?;
     }
-    // PSF accrual in USD equivalent (accounting only)
-    config.psf_balance = config.psf_balance.saturating_add(fee_usd / 10);
+    // PSF accrual in USD equivalent (accounting only, based on capped fee)
+    let capped_fee_usd = checked_mul_div(capped_fee, collateral_price, pow)?;
+    config.psf_balance = config.psf_balance.saturating_add(capped_fee_usd / 10);
 
     // -------- 7. Return collateral to user --------
     if collateral_to_return > 0 {

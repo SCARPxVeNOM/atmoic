@@ -192,7 +192,9 @@ pub struct Position {
     pub perp_size: u64,
     pub entry_price: u64,
     pub opened_at: i64,
-    pub hedge_amount: u64,
+    /// Power parameter in milli-units: 1000=standard (p=1.0), 2000=squeeth (p=2.0), 500=sqrt (p=0.5).
+    /// Formerly `hedge_amount`. Existing positions with value 0 are treated as standard perps.
+    pub power_milli: u64,
     // V3: collateral price at open time (6dp) — for JLP max(entry,current) health rule
     pub collateral_entry_price: u64,
     pub is_open: bool,
@@ -201,7 +203,7 @@ pub struct Position {
 
 impl Position {
     pub const V1_SPACE: usize = 107; // Original layout without new fields
-    pub const V2_SPACE: usize = 179; // V1 + 32(collateral_mint) + 32(kamino_obligation) + 8(hedge_amount)
+    pub const V2_SPACE: usize = 179; // V1 + 32(collateral_mint) + 32(kamino_obligation) + 8(power_milli)
     // V3: V2 + 8(collateral_entry_price) = 187
     pub const INIT_SPACE: usize = 187;
 
@@ -227,8 +229,8 @@ impl Position {
         let entry_price = u64::from_le_bytes(data[o..o+8].try_into().unwrap()); o += 8;
         let opened_at = i64::from_le_bytes(data[o..o+8].try_into().unwrap()); o += 8;
 
-        // V2: hedge_amount after opened_at
-        let hedge_amount = if data.len() >= Self::V2_SPACE {
+        // V2: power_milli after opened_at (formerly hedge_amount; 0 = standard perp)
+        let power_milli = if data.len() >= Self::V2_SPACE {
             let v = u64::from_le_bytes(data[o..o+8].try_into().unwrap()); o += 8;
             v
         } else {
@@ -245,7 +247,7 @@ impl Position {
 
         let is_open = data[o] != 0; o += 1;
         let bump = data[o];
-        Some(Self { owner, perp_market, collateral_mint, kamino_obligation, collateral_amount, borrow_amount_usdc, perp_side, perp_size, entry_price, opened_at, hedge_amount, collateral_entry_price, is_open, bump })
+        Some(Self { owner, perp_market, collateral_mint, kamino_obligation, collateral_amount, borrow_amount_usdc, perp_side, perp_size, entry_price, opened_at, power_milli, collateral_entry_price, is_open, bump })
     }
 
     pub fn serialize_into(&self, buf: &mut [u8]) {
@@ -260,7 +262,7 @@ impl Position {
         buf[o..o+8].copy_from_slice(&self.perp_size.to_le_bytes()); o += 8;
         buf[o..o+8].copy_from_slice(&self.entry_price.to_le_bytes()); o += 8;
         buf[o..o+8].copy_from_slice(&self.opened_at.to_le_bytes()); o += 8;
-        buf[o..o+8].copy_from_slice(&self.hedge_amount.to_le_bytes()); o += 8;
+        buf[o..o+8].copy_from_slice(&self.power_milli.to_le_bytes()); o += 8;
         buf[o..o+8].copy_from_slice(&self.collateral_entry_price.to_le_bytes()); o += 8;
         buf[o] = self.is_open as u8; o += 1;
         buf[o] = self.bump;

@@ -47,6 +47,9 @@ pub fn process(
         let space = 8 + OrderCommitment::INIT_SPACE;
         let seeds: &[&[u8]] = &[COMMITMENT_SEED, user.key.as_ref(), &[bump]];
         create_pda_account(user, commitment_ai, system_program, space, program_id, seeds)?;
+    } else {
+        // Existing account — verify ownership before overwriting
+        ensure!(commitment_ai.owner == program_id, AtomicPerpsError::BadInput);
     }
 
     let commitment = OrderCommitment { hash, side, notional, slot, revealed: false };

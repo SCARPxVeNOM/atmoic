@@ -59,15 +59,15 @@ pub fn process(
     ensure!(*caller.key == config.authority, AtomicPerpsError::Unauthorized);
     let mut position = load_position(position_ai)?;
 
-    ensure!(position.is_open, AtomicPerpsError::PositionNotOpen);
-    ensure!(!config.is_paused, AtomicPerpsError::ProtocolPaused);
-
-    // Verify position PDA
+    // Verify position PDA before using any position data
     let (expected_pos_pda, _) = Pubkey::find_program_address(
         &[POSITION_SEED, position.owner.as_ref(), pyth_price_feed.key.as_ref()],
         program_id,
     );
     ensure!(*position_ai.key == expected_pos_pda, AtomicPerpsError::BadInput);
+
+    ensure!(position.is_open, AtomicPerpsError::PositionNotOpen);
+    ensure!(!config.is_paused, AtomicPerpsError::ProtocolPaused);
 
     // Timing check: at least 8h since last settlement
     let clock = Clock::get()?;
@@ -80,13 +80,18 @@ pub fn process(
         AtomicPerpsError::FundingRateExceedsMax
     );
 
-    // Verify oracle is fresh (validates staleness, confidence)
+    // Verify oracle matches position's market and is fresh
     ensure!(is_allowed_feed(pyth_price_feed.key), AtomicPerpsError::InvalidOracleFeed);
+    ensure!(*pyth_price_feed.key == position.perp_market, AtomicPerpsError::InvalidOracleFeed);
     let (current_price, _conf) = validate_and_get_price(pyth_price_feed, &clock)?;
 
     // Calculate funding adjustment in USD: (perp_size * funding_rate_bps) / BPS_DENOMINATOR
     let perp_size_i = position.perp_size as i128;
-    let adjustment_usd_128 = (perp_size_i * (funding_rate_bps as i128)) / (BPS_DENOMINATOR as i128);
+    let adjustment_usd_128 = perp_size_i
+        .checked_mul(funding_rate_bps as i128)
+        .ok_or(ProgramError::from(AtomicPerpsError::MathOverflow))?
+        .checked_div(BPS_DENOMINATOR as i128)
+        .ok_or(ProgramError::from(AtomicPerpsError::MathOverflow))?;
     let adjustment_usd = i64::try_from(adjustment_usd_128)
         .map_err(|_| ProgramError::from(AtomicPerpsError::MathOverflow))?;
 
@@ -106,7 +111,8 @@ pub fn process(
     let adjustment_collateral = if adjustment_abs_usd == 0 {
         0u64
     } else {
-        checked_mul_div(adjustment_abs_usd, pow, current_price.max(1))?
+        ensure!(current_price > 0, AtomicPerpsError::BadInput);
+        checked_mul_div(adjustment_abs_usd, pow, current_price)?
     };
 
     let new_collateral = if effective_adjustment_usd >= 0 {
@@ -126,7 +132,7 @@ pub fn process(
 
     // Update global state
     config.last_funding_at = clock.unix_timestamp;
-    config.accumulated_funding = config.accumulated_funding.wrapping_add(funding_rate_bps);
+    config.accumulated_funding = config.accumulated_funding.saturating_add(funding_rate_bps);
 
     save_config(global_config_ai, &config)?;
     save_position(position_ai, &position)?;

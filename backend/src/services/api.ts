@@ -49,6 +49,9 @@ import { fetchJlpPrice } from "../lib/jlp";
 import { CollateralType } from "../lib/haircuts";
 import { checkCollateralCap, CollateralTotals } from "../lib/collateral-caps";
 import { msolState } from "./msol-monitor";
+import { getCollateralYield } from "../lib/yield-tracker";
+import { computePortfolioMargin } from "../lib/portfolio-margin";
+import { recordTrade, getTradeHistory } from "../lib/trade-history";
 
 const log = pino({ transport: { target: "pino-pretty" } } as any);
 
@@ -118,6 +121,17 @@ app.get("/position/:wallet/:market?", async (req, res) => {
   }
 });
 
+// Trade history for a wallet
+app.get("/trades/:wallet", (req, res) => {
+  try {
+    const wallet = req.params.wallet;
+    const history = getTradeHistory(wallet);
+    res.json(history);
+  } catch (e) {
+    res.status(400).json({ error: String(e) });
+  }
+});
+
 app.get("/position/:wallet/:market/health", async (req, res) => {
   try {
     const wallet = new PublicKey(req.params.wallet);
@@ -151,6 +165,62 @@ app.get("/position/:wallet/:market/health", async (req, res) => {
     });
   } catch (e) {
     res.status(400).json({ error: String(e) });
+  }
+});
+
+// ----- Portfolio Margin (scenario-based cross-position health) -----
+app.get("/portfolio/:wallet/health", async (req, res) => {
+  try {
+    const wallet = new PublicKey(req.params.wallet);
+    // Fetch all open positions
+    const accounts = await connection.getProgramAccounts(programId, {
+      filters: [
+        { dataSize: 195 },
+        { memcmp: { offset: 8, bytes: wallet.toBase58() } },
+      ],
+    });
+    const positions = accounts
+      .map(({ account }) => { try { return decodePosition(account.data); } catch { return null; } })
+      .filter((p): p is NonNullable<typeof p> => p !== null && p.isOpen);
+
+    // Fetch prices for all markets
+    const feedIds: Record<string, string> = {
+      "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE": "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d",
+      "4cSM2e6rvbGQUFiJbqytoVMi5GgghSMr8LwVrT9VPSPo": "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
+      "42amVS4KgzR9rA28tkVYqVXjq9Qa8dcZQMbH5EYFX6XC": "ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace",
+    };
+    const prices: Record<string, number> = {};
+    for (const [pubkey, feedId] of Object.entries(feedIds)) {
+      try {
+        const { price6dp } = await fetchLatestPrice(feedId);
+        prices[pubkey] = Number(price6dp) / 1e6;
+      } catch { /* skip */ }
+    }
+
+    const result = computePortfolioMargin(positions, prices);
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: String(e) });
+  }
+});
+
+// ----- Yield Rate per Collateral Type -----
+app.get("/yield/:collateral", async (req, res) => {
+  try {
+    const collateral = req.params.collateral.toUpperCase();
+    const mintMap: Record<string, string> = {
+      SOL: "So11111111111111111111111111111111111111112",
+      JLP: "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4",
+      MSOL: "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",
+    };
+    const mint = mintMap[collateral];
+    if (!mint) return res.status(400).json({ error: `Unknown collateral: ${collateral}` });
+
+    const { price6dp } = await fetchLatestPrice();
+    const yieldInfo = await getCollateralYield(mint, price6dp);
+    res.json(yieldInfo);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
   }
 });
 
@@ -229,6 +299,7 @@ app.post("/build-tx/open", async (req, res) => {
       leverageBps,
       market = "SOL-PERP",
       collateralType = "SOL",   // "SOL" | "JLP" | "mSOL"
+      power = 1000,             // 1000=standard, 2000=squeeth
     } = req.body ?? {};
     if (!wallet || !collateralAmount || !side || !leverageBps) {
       return res.status(400).json({ error: "missing required field" });
@@ -336,6 +407,9 @@ app.post("/build-tx/open", async (req, res) => {
       true,
     );
 
+    // For non-SOL markets, pass SOL oracle for collateral valuation & sanity checks
+    const SOL_ORACLE_PUBKEY = new PublicKey("7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE");
+    const isSolMarket = marketFeed.equals(SOL_ORACLE_PUBKEY);
     const ix = buildAtomicOpenIx({
       user,
       userCollateralAccount,
@@ -348,6 +422,8 @@ app.post("/build-tx/open", async (req, res) => {
       spreadFeeBps: risk.spreadBps,
       collateralType: collTypeNum,
       collateralPrice: collateralPrice6dp,
+      powerMilli: Number(power),
+      solOracleFeed: isSolMarket ? undefined : SOL_ORACLE_PUBKEY,
     });
 
     const [{ blockhash, lastValidBlockHeight }, lookupTables] = await Promise.all([
@@ -519,6 +595,8 @@ app.post("/build-tx/close", async (req, res) => {
       true,
     );
 
+    const SOL_ORACLE_PK = new PublicKey("7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE");
+    const isSolMarketClose = marketFeed.equals(SOL_ORACLE_PK);
     const ix = buildAtomicCloseIx({
       user,
       userCollateralAccount,
@@ -527,6 +605,7 @@ app.post("/build-tx/close", async (req, res) => {
       pythPriceFeed: marketFeed,
       closeBps: Number(closeBps),
       collateralPrice: closeCollateralPrice,
+      solOracleFeed: isSolMarketClose ? undefined : SOL_ORACLE_PK,
     });
 
     const [{ blockhash, lastValidBlockHeight }, lookupTables] = await Promise.all([
@@ -577,6 +656,29 @@ app.post("/build-tx/close", async (req, res) => {
     } catch {
       txs = [buildV0Tx(setupIxs), buildV0Tx(mainIxs)];
     }
+
+    // Record trade for history (optimistic — recorded at tx build, not confirmation)
+    const JLP_MINT_KEY = "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4";
+    const MSOL_MINT_KEY = "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So";
+    const entryPx = Number(position.entryPrice) / 1e6;
+    const exitPx = Number(await fetchLatestPrice(marketInfo?.pythFeedId).then(r => r.price6dp).catch(() => 0n)) / 1e6 || entryPx;
+    const posNotional = Number(position.perpSize) / 1e6;
+    const closeFrac = Number(closeBps) / 10000;
+    const closingNotional = posNotional * closeFrac;
+    const priceDelta = position.perpSide === 0 ? exitPx - entryPx : entryPx - exitPx;
+    const pnlEst = entryPx > 0 ? (priceDelta / entryPx) * closingNotional : 0;
+    recordTrade({
+      wallet: wallet,
+      market: market,
+      side: position.perpSide === 0 ? "Long" : "Short",
+      entryPrice: entryPx,
+      exitPrice: exitPx,
+      size: closingNotional,
+      pnl: Math.round(pnlEst * 1e6) / 1e6,
+      collateralType: posMintStr === JLP_MINT_KEY ? "JLP" : posMintStr === MSOL_MINT_KEY ? "mSOL" : "SOL",
+      closeBps: Number(closeBps),
+      closedAt: Math.floor(Date.now() / 1000),
+    });
 
     res.json({
       txs,
@@ -635,10 +737,14 @@ app.get("/funding/:market", async (req, res) => {
     const marketInfo = getMarket(symbol);
     const feedId = marketInfo?.pythFeedId;
 
-    const { twapPrice, sampleCount } = compute8hTwap();
+    const { twapPrice: rawTwap, sampleCount } = compute8hTwap();
     const config = await loadConfig();
     const { price6dp } = await fetchLatestPrice(feedId);
     const spotPrice = Number(price6dp) / 1e6;
+
+    // TWAP samples are SOL-only; for non-SOL markets use spot as index (no TWAP available yet)
+    const isSolMarket = symbol === "SOL-PERP";
+    const twapPrice = (isSolMarket && rawTwap > 0) ? rawTwap : spotPrice;
     const { rate8h, rateAnnualized } = computeFundingRate(spotPrice, twapPrice);
 
     // Predictive rate with trend/skew/variance adjustments

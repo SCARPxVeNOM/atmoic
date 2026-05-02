@@ -30,6 +30,7 @@ pub fn process(
     let system_program = next_account_info(iter)?;
 
     ensure!(authority.is_signer, AtomicPerpsError::Unauthorized);
+    ensure!(*system_program.key == solana_program::system_program::ID, AtomicPerpsError::BadInput);
 
     let (config_pda, _) = Pubkey::find_program_address(&[CONFIG_SEED], program_id);
     ensure!(*global_config_ai.key == config_pda, AtomicPerpsError::BadInput);

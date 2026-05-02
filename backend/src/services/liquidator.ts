@@ -165,6 +165,9 @@ export async function runLiquidatorOnce(): Promise<void> {
     const liquidatorCollateralAta = getAssociatedTokenAddressSync(mint, liquidator.publicKey);
     const feeRecipientCollateralAta = getAssociatedTokenAddressSync(mint, config.feeRecipient);
 
+    // For non-SOL markets, pass SOL oracle for collateral valuation
+    const SOL_ORACLE = new PublicKey("7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE");
+    const isSolMarket = data.perpMarket.equals(SOL_ORACLE);
     const ix = buildLiquidateIx({
       liquidator: liquidator.publicKey,
       positionOwner: data.owner,
@@ -173,6 +176,7 @@ export async function runLiquidatorOnce(): Promise<void> {
       feeRecipientCollateralAccount: feeRecipientCollateralAta,
       pythPriceFeed: data.perpMarket,
       collateralPrice,
+      solOracleFeed: isSolMarket ? undefined : SOL_ORACLE,
     });
 
     const tx = new Transaction().add(

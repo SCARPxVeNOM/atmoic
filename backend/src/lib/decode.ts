@@ -51,7 +51,8 @@ export interface PositionData {
   perpSize: bigint;
   entryPrice: bigint;
   openedAt: bigint;
-  hedgeAmount: bigint;
+  /** Power parameter in milli-units: 0|1000=standard, 2000=squeeth. Formerly hedgeAmount. */
+  powerMilli: bigint;
   collateralEntryPrice: bigint; // V3
   isOpen: boolean;
   bump: number;
@@ -160,8 +161,8 @@ export function decodePosition(data: Buffer): PositionData {
   const perpSize = r.u64();
   const entryPrice = r.u64();
   const openedAt = r.i64();
-  // V2 field: hedge_amount after opened_at
-  const hedgeAmount = data.length >= V2_SPACE ? r.u64() : 0n;
+  // V2 field: power_milli after opened_at (formerly hedge_amount; 0 = standard perp)
+  const powerMilli = data.length >= V2_SPACE ? r.u64() : 0n;
   // V3 field: collateral_entry_price
   const collateralEntryPrice = data.length >= V3_SPACE ? r.u64() : 0n;
   const isOpen = r.bool();
@@ -169,6 +170,6 @@ export function decodePosition(data: Buffer): PositionData {
   return {
     owner, perpMarket, collateralMint, kaminoObligation,
     collateralAmount, borrowAmountUsdc, perpSide, perpSize,
-    entryPrice, openedAt, hedgeAmount, collateralEntryPrice, isOpen, bump,
+    entryPrice, openedAt, powerMilli, collateralEntryPrice, isOpen, bump,
   };
 }
