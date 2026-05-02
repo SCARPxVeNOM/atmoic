@@ -46,12 +46,12 @@ export function PortfolioView({
   const phCol = phBps > 1500 ? "#3fb68b" : phBps > 800 ? "#d29922" : "#ff5353";
 
   return (
-    <div style={{ flex: 1, overflowY: "auto", padding: 24, background: "#0d1117" }}>
+    <div style={{ flex: 1, overflowY: "auto", padding: 24, background: "#000" }}>
       <h2 style={{ fontSize: 20, fontWeight: 700, color: "#e6edf3", marginBottom: 20 }}>Portfolio Overview</h2>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 24 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1, marginBottom: 1, background: "#1a1a1f" }}>
         {STATS.map(s => (
-          <div key={s.label} style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 12, padding: 16 }}>
+          <div key={s.label} style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16 }}>
             <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>{s.label}</div>
             <div style={{ fontSize: 22, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: s.col || "#e6edf3" }}>{s.val}</div>
             {s.sub && <div style={{ fontSize: 12, color: s.col || "#8b949e", marginTop: 2 }}>{s.sub}</div>}
@@ -61,31 +61,31 @@ export function PortfolioView({
 
       {/* Portfolio Health Bar */}
       {portfolio && posCount > 0 && (
-        <div style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+        <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16, marginBottom: 1 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
             <span style={{ fontSize: 13, fontWeight: 600, color: "#e6edf3" }}>Portfolio Health</span>
             <span style={{ fontSize: 20, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: phCol }}>
               {(phBps / 100).toFixed(1)}%
             </span>
           </div>
-          <div style={{ width: "100%", height: 8, background: "#21262d", borderRadius: 4, overflow: "hidden" }}>
-            <div style={{ width: `${phPct}%`, height: "100%", background: phCol, borderRadius: 4, transition: "all 0.3s" }} />
+          <div style={{ width: "100%", height: 6, background: "#1a1a1f", borderRadius: 0, overflow: "hidden" }}>
+            <div style={{ width: `${phPct}%`, height: "100%", background: phCol, borderRadius: 0, transition: "all 0.3s" }} />
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 14 }}>
-            <div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 1, marginTop: 14, background: "#1a1a1f" }}>
+            <div style={{ background: "#0a0a0b", padding: "10px 0" }}>
               <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase" }}>Portfolio Margin</div>
               <div style={{ fontSize: 14, fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3", marginTop: 2 }}>
                 ${portfolio.portfolioMarginUsd.toFixed(2)}
               </div>
             </div>
-            <div>
+            <div style={{ background: "#0a0a0b", padding: "10px 12px" }}>
               <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase" }}>Individual Sum</div>
               <div style={{ fontSize: 14, fontFamily: "IBM Plex Mono,monospace", color: "#8b949e", marginTop: 2 }}>
                 ${portfolio.individualMarginUsd.toFixed(2)}
               </div>
             </div>
-            <div>
+            <div style={{ background: "#0a0a0b", padding: "10px 12px" }}>
               <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase" }}>Worst Scenario</div>
               <div style={{ fontSize: 11, fontFamily: "IBM Plex Mono,monospace", color: "#d29922", marginTop: 4 }}>
                 {portfolio.worstScenario}
@@ -95,10 +95,10 @@ export function PortfolioView({
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: portfolio && portfolio.correlationMatrix.markets.length > 1 ? "1fr 1fr" : "1fr", gap: 1, background: "#1a1a1f" }}>
         {/* Correlation Matrix */}
         {portfolio && portfolio.correlationMatrix.markets.length > 1 && (
-          <div style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 12, padding: 16 }}>
+          <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: "#e6edf3", marginBottom: 14 }}>Correlation Matrix</div>
             <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
               <thead>
@@ -113,18 +113,15 @@ export function PortfolioView({
                 {portfolio.correlationMatrix.markets.map((m, i) => (
                   <tr key={m}>
                     <td style={{ padding: 4, color: "#8b949e", fontWeight: 600 }}>{m}</td>
-                    {portfolio.correlationMatrix.values[i].map((v, j) => {
-                      const intensity = Math.round(v * 255);
-                      return (
-                        <td key={j} style={{
-                          padding: 4, textAlign: "center",
-                          fontFamily: "IBM Plex Mono,monospace",
-                          color: v >= 0.8 ? "#3fb68b" : v >= 0.6 ? "#d29922" : "#8b949e",
-                        }}>
-                          {v.toFixed(2)}
-                        </td>
-                      );
-                    })}
+                    {portfolio.correlationMatrix.values[i].map((v, j) => (
+                      <td key={j} style={{
+                        padding: 4, textAlign: "center",
+                        fontFamily: "IBM Plex Mono,monospace",
+                        color: v >= 0.8 ? "#3fb68b" : v >= 0.6 ? "#d29922" : "#8b949e",
+                      }}>
+                        {v.toFixed(2)}
+                      </td>
+                    ))}
                   </tr>
                 ))}
               </tbody>
@@ -133,7 +130,7 @@ export function PortfolioView({
         )}
 
         {/* Collateral Breakdown */}
-        <div style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 12, padding: 16 }}>
+        <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: "#e6edf3", marginBottom: 14 }}>Collateral Breakdown</div>
           {([
             ["SOL", hasPosition ? "100%" : "0%", hasPosition ? 1 : 0],
@@ -142,8 +139,8 @@ export function PortfolioView({
           ] as [string, string, number][]).map(([name, pct, frac]) => (
             <div key={name} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, fontSize: 13 }}>
               <span style={{ color: "#8b949e", width: 36 }}>{name}</span>
-              <div style={{ flex: 1, background: "#21262d", borderRadius: 3, height: 6 }}>
-                <div style={{ width: `${frac * 100}%`, height: "100%", background: accent, borderRadius: 3 }} />
+              <div style={{ flex: 1, background: "#1a1a1f", borderRadius: 0, height: 6 }}>
+                <div style={{ width: `${frac * 100}%`, height: "100%", background: accent, borderRadius: 0 }} />
               </div>
               <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3", width: 32, textAlign: "right" }}>{pct}</span>
             </div>

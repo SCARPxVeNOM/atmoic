@@ -145,7 +145,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
   };
 
   return (
-    <div style={{ flex: 1, overflowY: "auto", padding: 24, background: "#0d1117" }}>
+    <div style={{ flex: 1, overflowY: "auto", padding: 24, background: "#000" }}>
       {/* Page header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
         <div>
@@ -171,8 +171,8 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
       </div>
 
       {/* Queues */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
-        <div style={{ background: "#161b22", borderRadius: 12, padding: 16, border: "1px solid #30363d" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, marginBottom: 1, background: "#1a1a1f" }}>
+        <div style={{ background: "#0a0a0b", borderRadius: 0, padding: 16, border: "1px solid #1a1a1f" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
             <span style={{ fontSize: 13, fontWeight: 700, color: "#3fb68b", letterSpacing: "0.02em" }}>BID QUEUE</span>
             <span style={{ fontSize: 11, color: "#8b949e" }}>Longs</span>
@@ -183,7 +183,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
           {BID_QUEUE.map((o, i) => <QueueRow key={i} price={o.price} size={o.size} side="bid" />)}
         </div>
 
-        <div style={{ background: "#161b22", borderRadius: 12, padding: 16, border: "1px solid #30363d" }}>
+        <div style={{ background: "#0a0a0b", borderRadius: 0, padding: 16, border: "1px solid #1a1a1f" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
             <span style={{ fontSize: 13, fontWeight: 700, color: "#ff5353", letterSpacing: "0.02em" }}>ASK QUEUE</span>
             <span style={{ fontSize: 11, color: "#8b949e" }}>Shorts</span>
@@ -198,11 +198,11 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
       {/* Pyth oracle center line */}
       <div style={{
         display: "flex", alignItems: "center", gap: 12, padding: "10px 16px",
-        background: "#161b22", borderRadius: 8, border: "1px solid #30363d", marginBottom: 16, fontSize: 12,
+        background: "#0a0a0b", borderRadius: 0, border: "1px solid #1a1a1f", marginBottom: 1, fontSize: 12,
       }}>
         <span style={{ color: "#8b949e" }}>Pyth Oracle</span>
         <span style={{ fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: accent, fontSize: 15 }}>${oraclePrice.toFixed(2)}</span>
-        <span style={{ color: "#30363d" }}>&middot;</span>
+        <span style={{ color: "#1a1a1f" }}>&middot;</span>
         <span style={{ color: "#8b949e" }}>Cap &plusmn;0.3%</span>
         <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#e6edf3" }}>
           ${(oraclePrice * (1 - CAP)).toFixed(2)} &ndash; ${(oraclePrice * (1 + CAP)).toFixed(2)}
@@ -211,7 +211,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
       </div>
 
       {/* Place order */}
-      <div style={{ background: "#161b22", borderRadius: 12, padding: 20, border: "1px solid #30363d", marginBottom: 16 }}>
+      <div style={{ background: "#0a0a0b", borderRadius: 0, padding: 20, border: "1px solid #1a1a1f", marginBottom: 1 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: "#e6edf3", marginBottom: 14 }}>Place Order</div>
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
           <div>
@@ -222,10 +222,10 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
                 const active = orderSide === s;
                 return (
                   <button key={s} onClick={() => setOrderSide(s)} style={{
-                    padding: "8px 18px", border: "1px solid #30363d", cursor: "pointer", fontSize: 13, fontWeight: 700,
+                    padding: "8px 18px", border: "1px solid #1a1a1f", cursor: "pointer", fontSize: 13, fontWeight: 700,
                     background: active ? `${col}20` : "#0d1117",
                     color: active ? col : "#8b949e",
-                    borderRadius: s === "BID" ? "6px 0 0 6px" : "0 6px 6px 0",
+                    borderRadius: 0,
                     transition: "all 0.15s",
                   }}>{s} {s === "BID" ? "(Long)" : "(Short)"}</button>
                 );
@@ -236,7 +236,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
           <div style={{ flex: 1, minWidth: 120 }}>
             <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>Price ($)</div>
             <input value={price} onChange={e => setPrice(e.target.value)} style={{
-              width: "100%", background: "#0d1117", border: "1px solid #30363d", borderRadius: 6,
+              width: "100%", background: "#000", border: "1px solid #1a1a1f", borderRadius: 0,
               padding: "8px 10px", color: "#e6edf3", fontFamily: "IBM Plex Mono,monospace",
               fontSize: 14, outline: "none", boxSizing: "border-box",
             }} />
@@ -245,7 +245,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
           <div style={{ flex: 1, minWidth: 120 }}>
             <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>Size (USDC)</div>
             <input value={size} onChange={e => setSize(e.target.value)} style={{
-              width: "100%", background: "#0d1117", border: "1px solid #30363d", borderRadius: 6,
+              width: "100%", background: "#000", border: "1px solid #1a1a1f", borderRadius: 0,
               padding: "8px 10px", color: "#e6edf3", fontFamily: "IBM Plex Mono,monospace",
               fontSize: 14, outline: "none", boxSizing: "border-box",
             }} />
@@ -255,7 +255,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
             disabled={busy || !publicKey}
             onClick={placeOrder}
             style={{
-              padding: "9px 24px", borderRadius: 6, border: "none",
+              padding: "9px 24px", borderRadius: 0, border: "none",
               background: !publicKey || busy ? "#21262d" : orderSide === "BID" ? "#3fb68b" : "#ff5353",
               color: !publicKey || busy ? "#8b949e" : "#fff",
               fontSize: 13, fontWeight: 700,
@@ -268,8 +268,8 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
       </div>
 
       {/* Bottom row */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <div style={{ background: "#161b22", borderRadius: 12, padding: 14, border: "1px solid #30363d" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, background: "#1a1a1f" }}>
+        <div style={{ background: "#0a0a0b", borderRadius: 0, padding: 14, border: "1px solid #1a1a1f" }}>
           <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Last Batch Result</div>
           <div style={{ fontSize: 13, lineHeight: 1.7 }}>
             <span style={{ color: "#8b949e" }}>Cleared @ </span>
@@ -281,7 +281,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
           </div>
         </div>
 
-        <div style={{ background: "#161b22", borderRadius: 12, padding: 14, border: "1px solid #30363d" }}>
+        <div style={{ background: "#0a0a0b", borderRadius: 0, padding: 14, border: "1px solid #1a1a1f" }}>
           <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Your Orders</div>
           {publicKey ? (
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12 }}>
@@ -291,7 +291,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
                 onClick={cancelOrder}
                 style={{
                   padding: "3px 10px", background: "transparent",
-                  border: "1px solid #30363d", borderRadius: 4,
+                  border: "1px solid #1a1a1f", borderRadius: 0,
                   color: "#ff5353", fontSize: 11,
                   cursor: busy ? "not-allowed" : "pointer",
                 }}>Cancel All</button>
