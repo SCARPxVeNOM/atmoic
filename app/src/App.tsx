@@ -28,10 +28,7 @@ const HEADER_MARKETS_FALLBACK = [
 ];
 
 const TWEAK_DEFAULTS: Tweaks = {
-  accentColor: "#d6a84a",
   showPositions: true,
-  chartInterval: "15m",
-  maxLeverage: 15,
 };
 
 function PriceTag({ market, active, onClick }: {
@@ -72,7 +69,7 @@ export const App: FC = () => {
   const { publicKey, disconnect } = useWallet();
   const { setVisible } = useWalletModal();
 
-  const accent = tweaks.accentColor;
+  const accent = "#e2b85d";
   const solPrice = oracle?.price ?? tickers?.["SOL-USD"]?.price ?? 0;
 
   // Live market data from Binance 24h tickers
