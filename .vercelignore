@@ -1,0 +1,16 @@
+programs/
+backend/
+target/
+test-ledger/
+.git/
+.claude/
+.agents/
+.design-tmp/
+.design-tmp2/
+*.so
+deploy-keypair.json
+*-keypair.json
+jlp_test.json
+jup_build.json
+reserves.json
+tmp_*.json

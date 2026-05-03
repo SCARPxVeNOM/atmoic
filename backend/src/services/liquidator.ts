@@ -57,6 +57,8 @@ export const liquidatorStats = {
   positionsScanned: 0,
   positionsWarned: 0,
   positionsLiquidated: 0,
+  partialDeleverages: 0,
+  fullLiquidations: 0,
   lastError: null as string | null,
 };
 
@@ -153,9 +155,20 @@ export async function runLiquidatorOnce(): Promise<void> {
       }
     }
 
+    const { deleverageZone, deleveragePct } = health;
+    const isPartial = deleveragePct < 100;
     log.warn(
-      { position: pubkey.toBase58(), owner: data.owner.toBase58(), healthBps: healthBps.toString() },
-      "liquidatable — sending tx"
+      {
+        position: pubkey.toBase58(),
+        owner: data.owner.toBase58(),
+        healthBps: healthBps.toString(),
+        deleverageZone,
+        deleveragePct,
+        action: isPartial ? `partial deleverage ${deleveragePct}%` : "full liquidation",
+      },
+      isPartial
+        ? `deleverage zone ${deleverageZone} — closing ${deleveragePct}% of position`
+        : "full liquidation — margin below 2%"
     );
 
     // Resolve vault + ATAs based on collateral type
@@ -190,8 +203,16 @@ export async function runLiquidatorOnce(): Promise<void> {
     for (let attempt = 0; attempt < MAX_RETRIES && !sent; attempt++) {
       try {
         const sig = await connection.sendTransaction(tx, [liquidator], { skipPreflight: false });
-        log.info({ sig, position: pubkey.toBase58(), attempt }, "liquidate submitted");
+        log.info(
+          { sig, position: pubkey.toBase58(), attempt, deleverageZone, deleveragePct },
+          isPartial ? "partial deleverage submitted" : "full liquidation submitted"
+        );
         liquidatorStats.positionsLiquidated++;
+        if (isPartial) {
+          liquidatorStats.partialDeleverages++;
+        } else {
+          liquidatorStats.fullLiquidations++;
+        }
         sent = true;
       } catch (e) {
         log.error({ err: String(e), position: pubkey.toBase58(), attempt }, "liquidate failed");

@@ -1,9 +1,10 @@
 const BACKEND = process.env.BACKEND_URL || "http://16.176.144.172:3001";
 
 export default async function handler(req, res) {
-  const { path } = req.query;
-  const target = Array.isArray(path) ? path.join("/") : path;
-  const qs = new URL(req.url, `http://${req.headers.host}`).search || "";
+  // Parse path from URL: /api/foo/bar → foo/bar
+  const parsed = new URL(req.url, `http://${req.headers.host}`);
+  const target = parsed.pathname.replace(/^\/api\//, "");
+  const qs = parsed.search || "";
   const url = `${BACKEND}/${target}${qs}`;
 
   try {

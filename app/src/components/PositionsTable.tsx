@@ -3,6 +3,8 @@ import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { VersionedTransaction } from "@solana/web3.js";
 import { PositionView } from "../hooks/usePosition";
 import { TradeRecord } from "../hooks/useTradeHistory";
+import { useFundingRate } from "../hooks/useFundingRate";
+import { useYield } from "../hooks/useYield";
 import { API_BASE } from "../config";
 import { useToast, Spinner } from "./Toast";
 import { classifyError } from "../lib/errors";
@@ -70,9 +72,17 @@ interface DisplayPosition {
   collateralPrice: number;
   liqPrice: number;
   openedAt: number;
+  netFunding8h: number | null;
+  selfRepaying: boolean;
 }
 
-function toDisplay(p: PositionView, prices: Record<string, number>, fallbackPrice: number): DisplayPosition {
+function toDisplay(
+  p: PositionView,
+  prices: Record<string, number>,
+  fallbackPrice: number,
+  fundingRate8h: number | null,
+  yieldRates: Record<string, number>,
+): DisplayPosition {
   const collMint = p.collateralMint || "";
   const decimals = getCollateralDecimals(collMint);
   const collNative = Number(p.collateralAmount) / Math.pow(10, decimals);
@@ -140,6 +150,12 @@ function toDisplay(p: PositionView, prices: Record<string, number>, fallbackPric
   const dlColor = dlZone === "safe" ? "#3fb68b" : dlZone === "zone1" ? "#d29922" :
     dlZone === "zone2" ? "#f59e0b" : dlZone === "zone3" ? "#ff5353" : "#991b1b";
 
+  // Net funding = funding rate - collateral yield
+  const collLabel = getCollateralLabel(collMint);
+  const yieldRate8h = yieldRates[collLabel] ?? 0;
+  const netFunding8h = fundingRate8h != null ? fundingRate8h - yieldRate8h : null;
+  const selfRepaying = netFunding8h != null && netFunding8h < 0;
+
   return {
     market: marketLabel,
     marketSymbol,
@@ -157,12 +173,14 @@ function toDisplay(p: PositionView, prices: Record<string, number>, fallbackPric
     deleverageZone: dlZone,
     deleverageBadge: dlBadge,
     deleverageBadgeCol: dlColor,
-    collateralLabel: getCollateralLabel(collMint),
+    collateralLabel: collLabel,
     collateralColor: getCollateralColor(collMint),
     collateralTokens: collNative,
     collateralPrice,
     liqPrice,
     openedAt: Number(p.openedAt || 0),
+    netFunding8h,
+    selfRepaying,
   };
 }
 
@@ -202,10 +220,22 @@ export function PositionsTable({
   const { publicKey, signTransaction, signAllTransactions } = useWallet();
   const { connection } = useConnection();
 
+  const funding = useFundingRate("sol");
+  const yieldSol = useYield("SOL");
+  const yieldJlp = useYield("JLP");
+  const yieldMsol = useYield("mSOL");
+  const yieldRates: Record<string, number> = {
+    SOL: yieldSol?.rate8h ?? 0,
+    JLP: yieldJlp?.rate8h ?? 0,
+    mSOL: yieldMsol?.rate8h ?? 0,
+  };
+
   const price = solPrice || 0;
   const priceMap = prices || {};
   const openPositions = (rawPositions || []).filter(p => p.isOpen);
-  const displayPositions: DisplayPosition[] = openPositions.map(p => toDisplay(p, priceMap, price));
+  const displayPositions: DisplayPosition[] = openPositions.map(p =>
+    toDisplay(p, priceMap, price, funding?.rate8h ?? null, yieldRates)
+  );
 
   const TABS = [
     { id: "positions", label: `Open Positions (${displayPositions.length})` },
@@ -258,8 +288,8 @@ export function PositionsTable({
     }
   };
 
-  const COLS = ["Market", "Side", "Lv", "Size", "Collateral", "Entry", "Mark", "Liq Price", "PnL", "Margin %", ""];
-  const rightAligned = ["Size", "Collateral", "Entry", "Mark", "Liq Price", "PnL"];
+  const COLS = ["Market", "Side", "Lv", "Size", "Collateral", "Entry", "Mark", "Liq Price", "PnL", "Net Funding", "Margin %", ""];
+  const rightAligned = ["Size", "Collateral", "Entry", "Mark", "Liq Price", "PnL", "Net Funding"];
 
   return (
     <div style={{
@@ -370,6 +400,30 @@ export function PositionsTable({
                       <div style={{ fontSize: 10, color: p.pnl >= 0 ? "#3fb68b" : "#ff5353" }}>
                         {p.pnlPct >= 0 ? "+" : ""}{p.pnlPct.toFixed(2)}%
                       </div>
+                    </td>
+
+                    {/* Net Funding (funding rate - collateral yield) */}
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace" }}>
+                      {p.netFunding8h != null ? (
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+                          <span style={{
+                            color: p.netFunding8h <= 0 ? "#3fb68b" : "#ff5353",
+                            fontWeight: 600,
+                            fontSize: 12,
+                          }}>
+                            {p.netFunding8h >= 0 ? "+" : ""}{p.netFunding8h.toFixed(4)}%
+                          </span>
+                          {p.selfRepaying && (
+                            <span style={{
+                              fontSize: 8, fontWeight: 700,
+                              color: "#3fb68b", background: "#3fb68b18",
+                              padding: "1px 4px", borderRadius: 3, marginTop: 1,
+                            }}>SELF-REPAYING</span>
+                          )}
+                        </div>
+                      ) : (
+                        <span style={{ color: "#484f58" }}>-</span>
+                      )}
                     </td>
 
                     {/* Margin % + Deleverage zone */}
