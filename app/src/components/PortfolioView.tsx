@@ -1,38 +1,69 @@
-import { PositionView, HealthView } from "../hooks/usePosition";
+import { PositionView } from "../hooks/usePosition";
 import { usePortfolioHealth, PortfolioHealth } from "../hooks/usePortfolioHealth";
+
+const JLP_MINT = "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4";
+const MSOL_MINT = "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So";
+
+function resolveCollateralLabel(mint: string): "SOL" | "JLP" | "mSOL" {
+  if (mint === JLP_MINT) return "JLP";
+  if (mint === MSOL_MINT) return "mSOL";
+  return "SOL";
+}
 
 export function PortfolioView({
   accent,
   solPrice,
-  position,
-  health,
+  positions,
+  prices,
 }: {
   accent: string;
   solPrice?: number;
-  position?: PositionView | null;
-  health?: HealthView | null;
+  positions: PositionView[];
+  prices?: Record<string, number>;
 }) {
   const portfolio = usePortfolioHealth();
   const price = solPrice || 0;
-  const hasPosition = position?.isOpen ?? false;
 
-  const collSol = hasPosition ? Number(position!.collateralAmount) / 1e9 : 0;
-  const borrowUsdc = hasPosition ? Number(position!.borrowAmountUsdc) / 1e6 : 0;
-  const entry = hasPosition ? Number(position!.entryPrice) / 1e6 : 0;
-  const side = position?.perpSide === 0 ? "Long" : "Short";
+  const openPositions = positions.filter((p) => p.isOpen);
+  const hasPositions = openPositions.length > 0;
 
-  const totalValue = portfolio?.totalCollateralUsd ?? collSol * price;
-  const pnl = hasPosition
-    ? (price - entry) * (Number(position!.perpSize) / 1e6 / price) * (side === "Long" ? 1 : -1)
-    : 0;
-  const pnlPct = totalValue > 0 ? (pnl / totalValue) * 100 : 0;
+  // Compute total collateral value across all open positions
+  let totalValue = 0;
+  let totalPnl = 0;
+  const collBreakdown: Record<string, number> = { SOL: 0, JLP: 0, mSOL: 0 };
 
-  const posCount = portfolio?.positions?.length ?? (hasPosition ? 1 : 0);
+  for (const pos of openPositions) {
+    const collSol = Number(pos.collateralAmount) / 1e9;
+    const entry = Number(pos.entryPrice) / 1e6;
+    const side = pos.perpSide === 0 ? 1 : -1;
+    const perpSize = Number(pos.perpSize) / 1e6;
+
+    const posCollValue = collSol * price;
+    totalValue += posCollValue;
+
+    if (entry > 0 && perpSize > 0) {
+      const power = pos.powerMilli === 0 || pos.powerMilli === 1000 ? 1 : pos.powerMilli / 1000;
+      let priceDelta: number;
+      if (power === 2) {
+        priceDelta = (price * price - entry * entry) / (entry * entry);
+      } else {
+        priceDelta = (price - entry) / entry;
+      }
+      totalPnl += priceDelta * (perpSize / price) * side;
+    }
+
+    const collType = resolveCollateralLabel(pos.collateralMint);
+    collBreakdown[collType] += posCollValue;
+  }
+
+  // Use portfolio hook values if available
+  if (portfolio?.totalCollateralUsd) totalValue = portfolio.totalCollateralUsd;
+  const pnlPct = totalValue > 0 ? (totalPnl / totalValue) * 100 : 0;
 
   const STATS = [
     { label: "Total Value", val: `$${totalValue.toFixed(2)}`, sub: null, col: undefined },
-    { label: "Unrealized PnL", val: `${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)}`, sub: `${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%`, col: pnl >= 0 ? "#3fb68b" : "#ff5353" },
-    { label: "Open Positions", val: String(posCount), sub: null, col: undefined },
+    { label: "Unrealized PnL", val: `${totalPnl >= 0 ? "+" : ""}$${totalPnl.toFixed(2)}`, sub: `${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%`, col: totalPnl >= 0 ? "#3fb68b" : "#ff5353" },
+    { label: "Open Positions", val: String(openPositions.length), sub: null, col: undefined },
     {
       label: "Margin Savings",
       val: portfolio ? `$${portfolio.savingsUsd.toFixed(2)}` : "$0.00",
@@ -44,6 +75,14 @@ export function PortfolioView({
   const phBps = portfolio?.portfolioHealthBps ?? 10000;
   const phPct = Math.min(100, (phBps / 200)); // scale for bar
   const phCol = phBps > 1500 ? "#3fb68b" : phBps > 800 ? "#d29922" : "#ff5353";
+
+  // Collateral breakdown percentages
+  const collTotal = collBreakdown.SOL + collBreakdown.JLP + collBreakdown.mSOL;
+  const collItems: [string, string, number][] = [
+    ["SOL", collTotal > 0 ? `${((collBreakdown.SOL / collTotal) * 100).toFixed(0)}%` : "0%", collTotal > 0 ? collBreakdown.SOL / collTotal : 0],
+    ["JLP", collTotal > 0 ? `${((collBreakdown.JLP / collTotal) * 100).toFixed(0)}%` : "0%", collTotal > 0 ? collBreakdown.JLP / collTotal : 0],
+    ["mSOL", collTotal > 0 ? `${((collBreakdown.mSOL / collTotal) * 100).toFixed(0)}%` : "0%", collTotal > 0 ? collBreakdown.mSOL / collTotal : 0],
+  ];
 
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: 24, background: "#000" }}>
@@ -60,7 +99,7 @@ export function PortfolioView({
       </div>
 
       {/* Portfolio Health Bar */}
-      {portfolio && posCount > 0 && (
+      {portfolio && hasPositions && (
         <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16, marginBottom: 1 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
             <span style={{ fontSize: 13, fontWeight: 600, color: "#ffffff" }}>Portfolio Health</span>
@@ -96,7 +135,7 @@ export function PortfolioView({
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: portfolio && portfolio.correlationMatrix.markets.length > 1 ? "1fr 1fr" : "1fr", gap: 1, background: "#1a1a1f" }}>
-        {/* Correlation Matrix */}
+        {/* Correlation Matrix — always show with real static values */}
         {portfolio && portfolio.correlationMatrix.markets.length > 1 && (
           <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: "#ffffff", marginBottom: 14 }}>Correlation Matrix</div>
@@ -129,14 +168,10 @@ export function PortfolioView({
           </div>
         )}
 
-        {/* Collateral Breakdown */}
+        {/* Collateral Breakdown — computed from actual positions */}
         <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: "#ffffff", marginBottom: 14 }}>Collateral Breakdown</div>
-          {([
-            ["SOL", hasPosition ? "100%" : "0%", hasPosition ? 1 : 0],
-            ["JLP", "0%", 0],
-            ["mSOL", "0%", 0],
-          ] as [string, string, number][]).map(([name, pct, frac]) => (
+          {collItems.map(([name, pct, frac]) => (
             <div key={name} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, fontSize: 13 }}>
               <span style={{ color: "#8b949e", width: 36 }}>{name}</span>
               <div style={{ flex: 1, background: "#1a1a1f", borderRadius: 0, height: 6 }}>
@@ -147,6 +182,50 @@ export function PortfolioView({
           ))}
         </div>
       </div>
+
+      {/* Per-position breakdown */}
+      {hasPositions && (
+        <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16, marginTop: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#ffffff", marginBottom: 14 }}>Position Details</div>
+          <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #1a1a1f" }}>
+                {["Market", "Side", "Collateral", "Size", "Entry", "Power"].map(h => (
+                  <th key={h} style={{ padding: "6px 8px", color: "#8b949e", fontWeight: 600, textAlign: "left", textTransform: "uppercase", fontSize: 10 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {openPositions.map((pos, i) => {
+                const collType = resolveCollateralLabel(pos.collateralMint);
+                const collAmt = (Number(pos.collateralAmount) / 1e9).toFixed(4);
+                const size = (Number(pos.perpSize) / 1e6).toFixed(2);
+                const entry = (Number(pos.entryPrice) / 1e6).toFixed(2);
+                const sideLabel = pos.perpSide === 0 ? "Long" : "Short";
+                const sideCol = pos.perpSide === 0 ? "#3fb68b" : "#ff5353";
+                const isPower = pos.powerMilli === 2000;
+                // Derive market label from perpMarket pubkey
+                const FEED_LABELS: Record<string, string> = {
+                  "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE": "SOL-PERP",
+                  "4cSM2e6rvbGQUFiJbqytoVMi5GgghSMr8LwVrT9VPSPo": "BTC-PERP",
+                  "42amVS4KgzR9rA28tkVYqVXjq9Qa8dcZQMbH5EYFX6XC": "ETH-PERP",
+                };
+                const market = FEED_LABELS[pos.perpMarket] ?? pos.perpMarket.slice(0, 8);
+                return (
+                  <tr key={i} style={{ borderBottom: "1px solid #1a1a1f" }}>
+                    <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>{market}{isPower ? " \u00B2" : ""}</td>
+                    <td style={{ padding: "8px", fontWeight: 600, color: sideCol }}>{sideLabel}</td>
+                    <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>{collAmt} {collType}</td>
+                    <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>${size}</td>
+                    <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>${entry}</td>
+                    <td style={{ padding: "8px", color: isPower ? "#e2b85d" : "#8b949e" }}>{isPower ? "Squeeth" : "Standard"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

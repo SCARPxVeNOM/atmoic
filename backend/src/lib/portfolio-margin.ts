@@ -129,8 +129,14 @@ export function computePortfolioMargin(
 ): PortfolioMarginResult {
   const openPositions = positions.filter((p) => p.isOpen);
 
+  // Always build correlation matrix from static data (real values, never zeros)
+  const allFeeds = Object.keys(FEED_TO_LABEL);
+  const allMarkets = allFeeds.map((f) => FEED_TO_LABEL[f]);
+  const allCorrelationValues = allFeeds.map((f1) =>
+    allFeeds.map((f2) => FEED_CORRELATIONS[f1]?.[f2] ?? 0),
+  );
+
   if (openPositions.length === 0) {
-    const markets = Object.values(FEED_TO_LABEL);
     return {
       portfolioMarginUsd: 0,
       individualMarginUsd: 0,
@@ -140,7 +146,7 @@ export function computePortfolioMargin(
       portfolioHealthBps: 99999,
       totalCollateralUsd: 0,
       positions: [],
-      correlationMatrix: { markets, values: markets.map(() => markets.map(() => 0)) },
+      correlationMatrix: { markets: allMarkets, values: allCorrelationValues },
     };
   }
 
@@ -198,13 +204,6 @@ export function computePortfolioMargin(
     ? Math.round((totalCollateralUsd / portfolioMarginUsd) * 10000)
     : 99999;
 
-  // Build correlation matrix for active markets
-  const activeFeeds = [...new Set(openPositions.map((p) => p.perpMarket.toBase58()))];
-  const markets = activeFeeds.map((f) => FEED_TO_LABEL[f] ?? f.slice(0, 8));
-  const values = activeFeeds.map((f1) =>
-    activeFeeds.map((f2) => FEED_CORRELATIONS[f1]?.[f2] ?? 0),
-  );
-
   return {
     portfolioMarginUsd,
     individualMarginUsd,
@@ -214,6 +213,6 @@ export function computePortfolioMargin(
     portfolioHealthBps,
     totalCollateralUsd,
     positions: posDetails,
-    correlationMatrix: { markets, values },
+    correlationMatrix: { markets: allMarkets, values: allCorrelationValues },
   };
 }

@@ -229,11 +229,19 @@ app.get("/vault/risk", async (_req, res) => {
     const config = await loadConfig();
     const risk = evaluateVaultRisk(config);
     const vpin = getVpinClassification();
+    const maxLevBps = Number(config.maxLeverage);
+    const maxLev = maxLevBps > 0 ? maxLevBps / 1000 : 10; // BPS to x (e.g. 10000 → 10x)
+    const totalOi = Number(config.totalLongOi) + Number(config.totalShortOi);
+    const maxTvlNum = Number(config.maxTvl);
+    const oiHeadroom = maxTvlNum > 0 ? Math.max(0, maxTvlNum - totalOi) : 0;
     res.json({
       ...risk,
       vpin,
       totalLongOi: config.totalLongOi.toString(),
       totalShortOi: config.totalShortOi.toString(),
+      maxLeverage: maxLev,
+      maxTvl: maxTvlNum.toString(),
+      oiHeadroom: oiHeadroom.toString(),
     });
   } catch (e) {
     res.status(500).json({ error: String(e) });

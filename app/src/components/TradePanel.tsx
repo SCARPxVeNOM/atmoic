@@ -59,6 +59,8 @@ interface VaultRisk {
   spreadBps: number;
   skewPct: number;
   suspended: boolean;
+  maxLeverage?: number;
+  oiHeadroom?: string;
 }
 
 const MARKET_TO_PERP: Record<string, string> = {
@@ -128,21 +130,34 @@ export function TradePanel({
   const effectivePrice = col === "SOL" ? solPriceVal : collPrice;
 
   useEffect(() => {
-    if (!showProData) return;
     const tick = () => {
       fetch(`${API_BASE}/vault/risk`).then(r => r.json()).then(setVaultRisk).catch(() => {});
     };
     tick();
     const id = setInterval(tick, 10000);
     return () => clearInterval(id);
-  }, [showProData]);
+  }, []);
+
+  // Compute effective spread: A-S spread from vault, doubled when power mode on
+  const baseSpreadBps = vaultRisk?.spreadBps ?? 5;
+  const effectiveSpreadBps = powerMode ? baseSpreadBps * 2 : baseSpreadBps;
+
+  // Max leverage from on-chain config, capped further for power perps
+  const vaultMaxLev = vaultRisk?.maxLeverage ?? 10;
+  const maxLeverage = powerMode ? Math.min(vaultMaxLev, 5) : vaultMaxLev;
+
+  // Clamp leverage when max changes (e.g. toggling power mode)
+  useEffect(() => {
+    if (leverage > maxLeverage) setLeverage(maxLeverage);
+  }, [maxLeverage]);
 
   const summary = useMemo(() => {
     const collUsd = sol * effectivePrice;
     const effColl = collUsd * (1 - cut / 100);
     const notional = collUsd * leverage;
-    const fee = notional * 0.001;
-    const entryPrice = markPrice * (side === "Long" ? 1.0003 : 0.9997);
+    const fee = notional * (effectiveSpreadBps / 10000);
+    const slipBps = effectiveSpreadBps / 2; // half-spread as entry slippage
+    const entryPrice = markPrice * (side === "Long" ? 1 + slipBps / 10000 : 1 - slipBps / 10000);
     const marginRatio = notional > 0 ? effColl / notional : 9.99;
 
     const isCorrCollateral = col === "SOL" && perpMarket === "SOL-PERP";
@@ -176,7 +191,7 @@ export function TradePanel({
     const healthCol = marginPct > 15 ? C.pos : marginPct > 8 ? C.gold : C.neg;
 
     return { notional, entryPrice, liqPrice, fee, marginRatio, healthCol };
-  }, [sol, effectivePrice, markPrice, leverage, side, cut, col, perpMarket]);
+  }, [sol, effectivePrice, markPrice, leverage, side, cut, col, perpMarket, effectiveSpreadBps]);
 
   const sideColor = side === "Long" ? C.pos : C.neg;
   const sideBg    = side === "Long" ? C.posBg : C.negBg;
@@ -363,11 +378,11 @@ export function TradePanel({
         {/* Leverage */}
         <div>
           <div style={{ ...labelStyle, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-            <span>Leverage</span>
+            <span>Leverage <span style={{ fontSize: 9, color: C.t3, fontWeight: 400, textTransform: "none" }}>(max {maxLeverage}×)</span></span>
             <span style={{ fontFamily: MONO, fontSize: 12, color: C.t1, textTransform: "none", fontWeight: 600 }}>{leverage.toFixed(1)}×</span>
           </div>
           <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-            {LV_PRESETS.map(lv => {
+            {LV_PRESETS.filter(lv => lv <= maxLeverage).map(lv => {
               const active = leverage === lv;
               return (
                 <button key={lv} onClick={() => setLeverage(lv)} style={{
@@ -381,7 +396,7 @@ export function TradePanel({
               );
             })}
           </div>
-          <input type="range" min={1} max={10} step={0.5} value={leverage}
+          <input type="range" min={1} max={maxLeverage} step={0.5} value={Math.min(leverage, maxLeverage)}
             onChange={e => setLeverage(parseFloat(e.target.value))}
             style={{ width: "100%", accentColor: C.gold }} />
         </div>
@@ -453,8 +468,8 @@ export function TradePanel({
             <SummaryRow label="Position Size" value={`$${summary.notional.toFixed(2)}`} />
             <SummaryRow label="Entry Price"   value={`$${summary.entryPrice.toFixed(2)}`} />
             <SummaryRow label="Liq. Price"    value={`$${summary.liqPrice.toFixed(2)}`} color={C.neg} />
-            <SummaryRow label="Spread"        value={vaultRisk ? `${vaultRisk.spreadBps} bps` : "5 bps"} />
-            <SummaryRow label="Fee (10 bps)"  value={`$${summary.fee.toFixed(3)}`} />
+            <SummaryRow label={`Spread${powerMode ? " (2× power)" : ""}`} value={`${effectiveSpreadBps} bps`} />
+            <SummaryRow label={`Fee (${effectiveSpreadBps} bps)`} value={`$${summary.fee.toFixed(3)}`} />
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, alignItems: "baseline" }}>
             <span style={{ color: C.t2 }}>Margin Ratio</span>

@@ -261,7 +261,7 @@ export const App: FC = () => {
 
       {page === "Portfolio" && (
         <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-          <PortfolioView accent={accent} solPrice={solPrice} position={positions[0] || null} health={null} />
+          <PortfolioView accent={accent} solPrice={solPrice} positions={positions} prices={oraclePrices} />
         </div>
       )}
 
