@@ -4,9 +4,12 @@ import { API_BASE } from "../config";
 export interface BatchQueueView {
   bids: number;
   asks: number;
+  bidOrders: { price: number; size: number }[];
+  askOrders: { price: number; size: number }[];
   lastBatchAt: number;
   clearingPrice: number;
   totalVolume: number;
+  oraclePrice: number;
 }
 
 export function useBatchQueue(pollMs = 2000) {

@@ -16,6 +16,7 @@
  */
 
 import { fetchLatestPrice } from "./pyth";
+import { listMarkets } from "./market-registry";
 
 interface PriceSample {
   price6dp: bigint;
@@ -32,19 +33,40 @@ interface BasisObservation {
 const TWAP_WINDOW_MS = 8 * 60 * 60 * 1000; // 8 hours
 const SAMPLE_INTERVAL_MS = 15 * 60 * 1000;  // 15 min
 const OUTLIER_THRESHOLD_BPS = 50;            // 0.5%
-const samples: PriceSample[] = [];
+
+// Per-market sample buffers keyed by normalized market key (e.g. "sol", "btc", "eth")
+const marketSamples: Map<string, PriceSample[]> = new Map();
+
+// Market key → Pyth feed ID mapping (populated from market-registry)
+const MARKET_FEEDS: Record<string, string> = {};
+for (const m of listMarkets(true)) {
+  // "SOL-PERP" → "sol", "BTC-PERP" → "btc"
+  const key = m.symbol.split("-")[0].toLowerCase();
+  MARKET_FEEDS[key] = m.pythFeedId;
+}
+
+// Legacy compat: "samples" reference for backward compat (points to SOL)
+function getSamples(market: string): PriceSample[] {
+  if (!marketSamples.has(market)) marketSamples.set(market, []);
+  return marketSamples.get(market)!;
+}
+
 const basisHistory: BasisObservation[] = [];
 const HISTORY_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h of basis observations
 
-/** Collect a price sample from Pyth. Call every 15 minutes. */
+/** Collect price samples for ALL enabled markets from Pyth. Call every 15 minutes. */
 export async function collectSample(): Promise<void> {
-  try {
-    const { price6dp } = await fetchLatestPrice();
-    const now = Date.now();
-    samples.push({ price6dp, timestamp: now });
-    const cutoff = now - TWAP_WINDOW_MS;
-    while (samples.length > 0 && samples[0].timestamp < cutoff) samples.shift();
-  } catch { /* skip failed sample */ }
+  const now = Date.now();
+  const cutoff = now - TWAP_WINDOW_MS;
+
+  for (const [market, feedId] of Object.entries(MARKET_FEEDS)) {
+    try {
+      const { price6dp } = await fetchLatestPrice(feedId);
+      const buf = getSamples(market);
+      buf.push({ price6dp, timestamp: now });
+      while (buf.length > 0 && buf[0].timestamp < cutoff) buf.shift();
+    } catch { /* skip failed sample for this market */ }
+  }
 }
 
 /** Filter outliers: remove samples >0.5% from median. */
@@ -59,9 +81,10 @@ function filterOutliers(data: PriceSample[]): PriceSample[] {
   });
 }
 
-/** Compute 8h TWAP from stored samples. */
-export function compute8hTwap(): { twapPrice: number; sampleCount: number } {
-  const filtered = filterOutliers(samples);
+/** Compute 8h TWAP from stored samples for a specific market. */
+export function compute8hTwap(market: string = "sol"): { twapPrice: number; sampleCount: number } {
+  const buf = getSamples(market);
+  const filtered = filterOutliers(buf);
   if (filtered.length === 0) return { twapPrice: 0, sampleCount: 0 };
   let sum = 0n;
   for (const s of filtered) sum += s.price6dp;
@@ -201,10 +224,11 @@ export function computeEnhancedFundingRate(
 }
 
 /** Return recent samples for the funding history API. */
-export function getFundingHistory(): { timestamp: number; price: number; rate: number }[] {
-  if (samples.length < 2) return [];
-  const { twapPrice } = compute8hTwap();
-  return samples.map(s => {
+export function getFundingHistory(market: string = "sol"): { timestamp: number; price: number; rate: number }[] {
+  const buf = getSamples(market);
+  if (buf.length < 2) return [];
+  const { twapPrice } = compute8hTwap(market);
+  return buf.map(s => {
     const spot = Number(s.price6dp) / 1e6;
     const { rate8h } = computeFundingRate(spot, twapPrice || spot);
     return { timestamp: s.timestamp, price: spot, rate: rate8h };

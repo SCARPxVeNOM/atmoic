@@ -30,6 +30,20 @@ function QueueRow({ price, size, side }: { price: number; size: number; side: "b
   );
 }
 
+function EmptyQueue({ side }: { side: "bid" | "ask" }) {
+  const color = side === "bid" ? "#3fb68b" : "#ff5353";
+  return (
+    <div style={{ padding: "20px 0", textAlign: "center" }}>
+      <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 4 }}>
+        No {side === "bid" ? "buy" : "sell"} orders in queue
+      </div>
+      <div style={{ fontSize: 10, color: "#4a4a52" }}>
+        Place a {side === "bid" ? "BID" : "ASK"} order to be included in the next batch
+      </div>
+    </div>
+  );
+}
+
 function Countdown({ accentColor }: { accentColor: string }) {
   const [secs, setSecs] = useState(12);
   const [flash, setFlash] = useState(false);
@@ -67,28 +81,18 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
   const { connection } = useConnection();
   const batchQueue = useBatchQueue();
 
-  const oraclePrice = solPrice || 0;
+  const oraclePrice = batchQueue?.oraclePrice ?? solPrice ?? 0;
 
   // Default price input to oracle price
   useEffect(() => {
-    if (!price) setPrice(oraclePrice.toFixed(2));
+    if (!price && oraclePrice > 0) setPrice(oraclePrice.toFixed(2));
   }, [oraclePrice]);
 
   const lastClearing = batchQueue?.clearingPrice ?? oraclePrice;
 
-  // Placeholder queue rows based on oracle price
-  const BID_QUEUE = [
-    { price: oraclePrice + 0.50, size: 500 },
-    { price: oraclePrice + 0.30, size: 1200 },
-    { price: oraclePrice + 0.10, size: 800 },
-    { price: oraclePrice - 0.20, size: 2000 },
-  ];
-  const ASK_QUEUE = [
-    { price: oraclePrice, size: 300 },
-    { price: oraclePrice + 0.20, size: 800 },
-    { price: oraclePrice + 0.40, size: 1500 },
-    { price: oraclePrice + 0.70, size: 400 },
-  ];
+  // Real queue data from backend
+  const bidOrders = batchQueue?.bidOrders ?? [];
+  const askOrders = batchQueue?.askOrders ?? [];
 
   const sendTx = async (endpoint: string, body: any) => {
     if (!publicKey || !signTransaction) throw new Error("Connect wallet first");
@@ -135,6 +139,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
     try {
       const sig = await sendTx("/build-tx/cancel-order", {
         wallet: publicKey.toBase58(),
+        side: orderSide === "BID" ? "Long" : "Short",
         market: "SOL-PERP",
       });
       toast.success("Order Cancelled", sig.slice(0, 8) + "…");
@@ -182,7 +187,10 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#8b949e", marginBottom: 4 }}>
             <span>PRICE</span><span>SIZE (USDC)</span>
           </div>
-          {BID_QUEUE.map((o, i) => <QueueRow key={i} price={o.price} size={o.size} side="bid" />)}
+          {bidOrders.length > 0
+            ? bidOrders.map((o, i) => <QueueRow key={i} price={o.price} size={o.size} side="bid" />)
+            : <EmptyQueue side="bid" />
+          }
         </div>
 
         <div style={{ background: "#0a0a0b", borderRadius: 0, padding: 16, border: "1px solid #1a1a1f" }}>
@@ -193,7 +201,10 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#8b949e", marginBottom: 4 }}>
             <span>PRICE</span><span>SIZE (USDC)</span>
           </div>
-          {ASK_QUEUE.map((o, i) => <QueueRow key={i} price={o.price} size={o.size} side="ask" />)}
+          {askOrders.length > 0
+            ? askOrders.map((o, i) => <QueueRow key={i} price={o.price} size={o.size} side="ask" />)
+            : <EmptyQueue side="ask" />
+          }
         </div>
       </div>
 
@@ -282,7 +293,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
             <span style={{ fontFamily: "IBM Plex Mono,monospace", color: accent, fontWeight: 700 }}>${lastClearing.toFixed(2)}</span>
             <span style={{ color: "#8b949e" }}> &middot; Vol </span>
             <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>
-              ${batchQueue ? fmt(batchQueue.totalVolume) : "—"}
+              ${batchQueue ? fmt(batchQueue.totalVolume) : "0"}
             </span>
           </div>
         </div>
@@ -291,7 +302,12 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
           <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Your Orders</div>
           {publicKey ? (
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12 }}>
-              <span style={{ color: "#8b949e" }}>Check on-chain for active orders</span>
+              <span style={{ color: "#8b949e" }}>
+                {batchQueue && (batchQueue.bids + batchQueue.asks) > 0
+                  ? `${batchQueue.bids + batchQueue.asks} order(s) in current batch`
+                  : "No orders in current batch"
+                }
+              </span>
               <button
                 disabled={busy}
                 onClick={cancelOrder}

@@ -80,6 +80,88 @@ export function getVpinClassification(): {
  * Route an order to a shard index based on user pubkey.
  * user_pubkey[0] % 8
  */
+// ---- Live batch queue state (server-side tracking) ----
+
+interface PendingOrder {
+  user: string;
+  price: number;    // USD
+  size: number;     // USD notional
+  side: "bid" | "ask";
+  timestamp: number;
+}
+
+const pendingOrders: PendingOrder[] = [];
+const BATCH_WINDOW_MS = 15_000; // 15-second batch window
+
+let lastBatchResult: {
+  clearingPrice: number;
+  totalVolume: number;
+  fills: number;
+  timestamp: number;
+} = { clearingPrice: 0, totalVolume: 0, fills: 0, timestamp: 0 };
+
+/** Track an order placed via the API. */
+export function trackOrder(user: string, price: number, size: number, side: "bid" | "ask"): void {
+  pendingOrders.push({ user, price, size, side, timestamp: Date.now() });
+  // Prune orders older than 2 batch windows
+  const cutoff = Date.now() - BATCH_WINDOW_MS * 2;
+  while (pendingOrders.length > 0 && pendingOrders[0].timestamp < cutoff) pendingOrders.shift();
+}
+
+/** Remove a user's orders (cancel). */
+export function cancelUserOrders(user: string, side?: "bid" | "ask"): number {
+  const before = pendingOrders.length;
+  for (let i = pendingOrders.length - 1; i >= 0; i--) {
+    if (pendingOrders[i].user === user && (!side || pendingOrders[i].side === side)) {
+      pendingOrders.splice(i, 1);
+    }
+  }
+  return before - pendingOrders.length;
+}
+
+/** Record a batch clearing result. */
+export function recordBatchResult(clearingPrice: number, totalVolume: number, fills: number): void {
+  lastBatchResult = { clearingPrice, totalVolume, fills, timestamp: Date.now() };
+}
+
+/** Get current batch queue status for the API. */
+export function getBatchStatus(oraclePrice: number): {
+  bids: number;
+  asks: number;
+  bidOrders: { price: number; size: number }[];
+  askOrders: { price: number; size: number }[];
+  lastBatchAt: number;
+  clearingPrice: number;
+  totalVolume: number;
+  oraclePrice: number;
+} {
+  const now = Date.now();
+  // Only show orders from the current batch window
+  const windowStart = now - BATCH_WINDOW_MS;
+  const current = pendingOrders.filter(o => o.timestamp >= windowStart);
+
+  const bidOrders = current
+    .filter(o => o.side === "bid")
+    .sort((a, b) => b.price - a.price)
+    .map(o => ({ price: o.price, size: o.size }));
+
+  const askOrders = current
+    .filter(o => o.side === "ask")
+    .sort((a, b) => a.price - b.price)
+    .map(o => ({ price: o.price, size: o.size }));
+
+  return {
+    bids: bidOrders.length,
+    asks: askOrders.length,
+    bidOrders,
+    askOrders,
+    lastBatchAt: lastBatchResult.timestamp,
+    clearingPrice: lastBatchResult.clearingPrice || oraclePrice,
+    totalVolume: lastBatchResult.totalVolume,
+    oraclePrice,
+  };
+}
+
 export function routeToShard(userPubkey: string): number {
   const firstByte = Buffer.from(userPubkey, "base64")[0] ?? 0;
   return firstByte % 8;

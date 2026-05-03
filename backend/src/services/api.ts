@@ -44,7 +44,7 @@ import { compute8hTwap, computeFundingRate, computeEnhancedFundingRate, getFundi
 import { breakerState } from "./circuit-breaker";
 import { crankStats } from "./crank";
 import { fundingCrankStats } from "./funding-crank";
-import { getVpin, getVpinClassification } from "../lib/dfba";
+import { getVpin, getVpinClassification, getBatchStatus, trackOrder, cancelUserOrders } from "../lib/dfba";
 import { fetchJlpPrice } from "../lib/jlp";
 import { CollateralType } from "../lib/haircuts";
 import { checkCollateralCap, CollateralTotals } from "../lib/collateral-caps";
@@ -745,14 +745,14 @@ app.get("/funding/:market", async (req, res) => {
     const marketInfo = getMarket(symbol);
     const feedId = marketInfo?.pythFeedId;
 
-    const { twapPrice: rawTwap, sampleCount } = compute8hTwap();
+    // Per-market TWAP: "SOL-PERP" → "sol", "BTC-PERP" → "btc"
+    const marketKey = symbol.split("-")[0].toLowerCase();
+    const { twapPrice: rawTwap, sampleCount } = compute8hTwap(marketKey);
     const config = await loadConfig();
     const { price6dp } = await fetchLatestPrice(feedId);
     const spotPrice = Number(price6dp) / 1e6;
 
-    // TWAP samples are SOL-only; for non-SOL markets use spot as index (no TWAP available yet)
-    const isSolMarket = symbol === "SOL-PERP";
-    const twapPrice = (isSolMarket && rawTwap > 0) ? rawTwap : spotPrice;
+    const twapPrice = rawTwap > 0 ? rawTwap : spotPrice;
     const { rate8h, rateAnnualized } = computeFundingRate(spotPrice, twapPrice);
 
     // Predictive rate with trend/skew/variance adjustments
@@ -829,6 +829,10 @@ app.post("/build-tx/place-order", async (req, res) => {
       instructions: [ix],
     }).compileToV0Message(lookupTables);
 
+    // Track order server-side for batch status
+    const orderSide: "bid" | "ask" = side === "Long" || side === "BID" ? "bid" : "ask";
+    trackOrder(wallet, Number(price) / 1e6, Number(size) / 1e6, orderSide);
+
     const vtx = new VersionedTransaction(message);
     res.json({
       tx: Buffer.from(vtx.serialize()).toString("base64"),
@@ -863,12 +867,27 @@ app.post("/build-tx/cancel-order", async (req, res) => {
       instructions: [ix],
     }).compileToV0Message(lookupTables);
 
+    // Track cancellation server-side
+    const cancelSide: "bid" | "ask" | undefined = side === "Long" || side === "BID" ? "bid" : side === "Short" || side === "ASK" ? "ask" : undefined;
+    cancelUserOrders(wallet, cancelSide);
+
     const vtx = new VersionedTransaction(message);
     res.json({
       tx: Buffer.from(vtx.serialize()).toString("base64"),
       blockhash,
       lastValidBlockHeight,
     });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// ---- DFBA batch queue status ----
+app.get("/batch/status", async (_req, res) => {
+  try {
+    const { price6dp } = await fetchLatestPrice();
+    const oraclePrice = Number(price6dp) / 1e6;
+    res.json(getBatchStatus(oraclePrice));
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
