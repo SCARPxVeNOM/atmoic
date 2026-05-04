@@ -5,6 +5,7 @@ import { PositionView } from "../hooks/usePosition";
 import { TradeRecord } from "../hooks/useTradeHistory";
 import { useFundingRate } from "../hooks/useFundingRate";
 import { useYield } from "../hooks/useYield";
+import { useIsMobile } from "../hooks/useIsMobile";
 import { API_BASE } from "../config";
 import { useToast, Spinner } from "./Toast";
 import { classifyError } from "../lib/errors";
@@ -288,34 +289,42 @@ export function PositionsTable({
     }
   };
 
-  const COLS = ["Market", "Side", "Lv", "Size", "Collateral", "Entry", "Mark", "Liq Price", "PnL", "Net Funding", "Margin %", ""];
+  const isMobile = useIsMobile();
+
+  const COLS = isMobile
+    ? ["Market", "Side", "Size", "PnL", "Margin %", ""]
+    : ["Market", "Side", "Lv", "Size", "Collateral", "Entry", "Mark", "Liq Price", "PnL", "Net Funding", "Margin %", ""];
   const rightAligned = ["Size", "Collateral", "Entry", "Mark", "Liq Price", "PnL", "Net Funding"];
 
   return (
     <div style={{
-      height: 240, flexShrink: 0,
+      height: isMobile ? "auto" : 240,
+      minHeight: isMobile ? 120 : undefined,
+      flexShrink: 0,
       borderTop: "1px solid #1a1a1f", background: "#000",
       display: "flex", flexDirection: "column",
     }}>
       {/* Tab bar */}
-      <div style={{ display: "flex", borderBottom: "1px solid #30363d", padding: "0 4px", flexShrink: 0 }}>
+      <div style={{ display: "flex", borderBottom: "1px solid #30363d", padding: "0 4px", flexShrink: 0, overflowX: isMobile ? "auto" : undefined }}>
         {TABS.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{
-            padding: "7px 14px", fontSize: 12, fontWeight: 500,
+            padding: isMobile ? "6px 10px" : "7px 14px", fontSize: isMobile ? 11 : 12, fontWeight: 500,
             border: "none", background: "transparent", cursor: "pointer",
             color: tab === t.id ? "#ffffff" : "#8b949e",
             borderBottom: `2px solid ${tab === t.id ? accent : "transparent"}`,
-            transition: "color 0.15s",
+            transition: "color 0.15s", whiteSpace: "nowrap",
           }}>{t.label}</button>
         ))}
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", paddingRight: 12, fontSize: 11, color: "#8b949e" }}>
-          <span>Total PnL: </span>
-          <span style={{
-            fontFamily: "IBM Plex Mono,monospace",
-            color: totalPnl >= 0 ? "#3fb68b" : "#ff5353",
-            fontWeight: 600, marginLeft: 4,
-          }}>{totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(2)}</span>
-        </div>
+        {!isMobile && (
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", paddingRight: 12, fontSize: 11, color: "#8b949e" }}>
+            <span>Total PnL: </span>
+            <span style={{
+              fontFamily: "IBM Plex Mono,monospace",
+              color: totalPnl >= 0 ? "#3fb68b" : "#ff5353",
+              fontWeight: 600, marginLeft: 4,
+            }}>{totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(2)}</span>
+          </div>
+        )}
       </div>
 
       {/* Content */}
@@ -339,62 +348,73 @@ export function PositionsTable({
                 {displayPositions.map((p, i) => (
                   <tr key={i} style={{ borderBottom: "1px solid #161b22" }}>
                     {/* Market + badges */}
-                    <td style={{ padding: "6px 10px" }}>
+                    <td style={{ padding: isMobile ? "6px 6px" : "6px 10px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                        <span style={{ color: "#ffffff", fontWeight: 600 }}>{p.market}</span>
+                        <span style={{ color: "#ffffff", fontWeight: 600, fontSize: isMobile ? 11 : undefined }}>{p.market}</span>
                         {p.isPower && <span style={{ fontSize: 9, color: "#a78bfa", background: "#1a0a2e", padding: "1px 4px", borderRadius: 3, fontWeight: 700 }}>{"\u00B2"}</span>}
-                        <span style={{ fontSize: 9, color: p.collateralColor, background: `${p.collateralColor}18`, padding: "1px 4px", borderRadius: 3, fontWeight: 600 }}>{p.collateralLabel}</span>
+                        {!isMobile && <span style={{ fontSize: 9, color: p.collateralColor, background: `${p.collateralColor}18`, padding: "1px 4px", borderRadius: 3, fontWeight: 600 }}>{p.collateralLabel}</span>}
                       </div>
-                      <div style={{ fontSize: 10, color: "#484f58", marginTop: 1 }}>{timeAgo(p.openedAt)}</div>
+                      {!isMobile && <div style={{ fontSize: 10, color: "#484f58", marginTop: 1 }}>{timeAgo(p.openedAt)}</div>}
                     </td>
 
                     {/* Side */}
-                    <td style={{ padding: "6px 10px" }}>
+                    <td style={{ padding: isMobile ? "6px 4px" : "6px 10px" }}>
                       <span style={{
                         color: p.side === "Long" ? "#3fb68b" : "#ff5353",
                         fontWeight: 700, display: "flex", alignItems: "center", gap: 3,
+                        fontSize: isMobile ? 11 : undefined,
                       }}>
-                        <span style={{ fontSize: 13 }}>{p.side === "Long" ? "\u2191" : "\u2193"}</span>
-                        {p.side}
+                        <span style={{ fontSize: isMobile ? 11 : 13 }}>{p.side === "Long" ? "\u2191" : "\u2193"}</span>
+                        {isMobile ? p.side[0] : p.side}
                       </span>
                     </td>
 
-                    {/* Leverage */}
-                    <td style={{ padding: "6px 10px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff", fontWeight: 600 }}>
-                      {p.lv > 0 ? `${p.lv}x` : "-"}
-                    </td>
+                    {/* Leverage — desktop only */}
+                    {!isMobile && (
+                      <td style={{ padding: "6px 10px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff", fontWeight: 600 }}>
+                        {p.lv > 0 ? `${p.lv}x` : "-"}
+                      </td>
+                    )}
 
                     {/* Size (notional) */}
-                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>
+                    <td style={{ padding: isMobile ? "6px 4px" : "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff", fontSize: isMobile ? 11 : undefined }}>
                       {fmtPrice(p.sizeUsd)}
                     </td>
 
-                    {/* Collateral */}
-                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace" }}>
-                      <div style={{ color: "#ffffff" }}>{fmtPrice(p.margin / (1 - (HAIRCUTS[getCollateralMintFromLabel(p.collateralLabel)] || 0)))}</div>
-                      <div style={{ fontSize: 10, color: "#484f58" }}>
-                        {p.collateralTokens.toFixed(p.collateralLabel === "JLP" ? 4 : 6)} {p.collateralLabel}
-                      </div>
-                    </td>
+                    {/* Collateral — desktop only */}
+                    {!isMobile && (
+                      <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace" }}>
+                        <div style={{ color: "#ffffff" }}>{fmtPrice(p.margin / (1 - (HAIRCUTS[getCollateralMintFromLabel(p.collateralLabel)] || 0)))}</div>
+                        <div style={{ fontSize: 10, color: "#484f58" }}>
+                          {p.collateralTokens.toFixed(p.collateralLabel === "JLP" ? 4 : 6)} {p.collateralLabel}
+                        </div>
+                      </td>
+                    )}
 
-                    {/* Entry */}
-                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>
-                      {fmtPrice(p.entry)}
-                    </td>
+                    {/* Entry — desktop only */}
+                    {!isMobile && (
+                      <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>
+                        {fmtPrice(p.entry)}
+                      </td>
+                    )}
 
-                    {/* Mark */}
-                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>
-                      {fmtPrice(p.mark)}
-                    </td>
+                    {/* Mark — desktop only */}
+                    {!isMobile && (
+                      <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>
+                        {fmtPrice(p.mark)}
+                      </td>
+                    )}
 
-                    {/* Liq Price */}
-                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace" }}>
-                      <span style={{ color: "#ff5353" }}>{p.liqPrice > 0 ? fmtPrice(p.liqPrice) : "-"}</span>
-                    </td>
+                    {/* Liq Price — desktop only */}
+                    {!isMobile && (
+                      <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace" }}>
+                        <span style={{ color: "#ff5353" }}>{p.liqPrice > 0 ? fmtPrice(p.liqPrice) : "-"}</span>
+                      </td>
+                    )}
 
                     {/* PnL */}
-                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace" }}>
-                      <div style={{ color: p.pnl >= 0 ? "#3fb68b" : "#ff5353", fontWeight: 600 }}>
+                    <td style={{ padding: isMobile ? "6px 4px" : "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace" }}>
+                      <div style={{ color: p.pnl >= 0 ? "#3fb68b" : "#ff5353", fontWeight: 600, fontSize: isMobile ? 11 : undefined }}>
                         {p.pnl >= 0 ? "+" : ""}{fmtPrice(Math.abs(p.pnl))}
                       </div>
                       <div style={{ fontSize: 10, color: p.pnl >= 0 ? "#3fb68b" : "#ff5353" }}>
@@ -402,34 +422,36 @@ export function PositionsTable({
                       </div>
                     </td>
 
-                    {/* Net Funding (funding rate - collateral yield) */}
-                    <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace" }}>
-                      {p.netFunding8h != null ? (
-                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                          <span style={{
-                            color: p.netFunding8h <= 0 ? "#3fb68b" : "#ff5353",
-                            fontWeight: 600,
-                            fontSize: 12,
-                          }}>
-                            {p.netFunding8h >= 0 ? "+" : ""}{p.netFunding8h.toFixed(4)}%
-                          </span>
-                          {p.selfRepaying && (
+                    {/* Net Funding — desktop only */}
+                    {!isMobile && (
+                      <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "IBM Plex Mono,monospace" }}>
+                        {p.netFunding8h != null ? (
+                          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
                             <span style={{
-                              fontSize: 8, fontWeight: 700,
-                              color: "#3fb68b", background: "#3fb68b18",
-                              padding: "1px 4px", borderRadius: 3, marginTop: 1,
-                            }}>SELF-REPAYING</span>
-                          )}
-                        </div>
-                      ) : (
-                        <span style={{ color: "#484f58" }}>-</span>
-                      )}
-                    </td>
+                              color: p.netFunding8h <= 0 ? "#3fb68b" : "#ff5353",
+                              fontWeight: 600,
+                              fontSize: 12,
+                            }}>
+                              {p.netFunding8h >= 0 ? "+" : ""}{p.netFunding8h.toFixed(4)}%
+                            </span>
+                            {p.selfRepaying && (
+                              <span style={{
+                                fontSize: 8, fontWeight: 700,
+                                color: "#3fb68b", background: "#3fb68b18",
+                                padding: "1px 4px", borderRadius: 3, marginTop: 1,
+                              }}>SELF-REPAYING</span>
+                            )}
+                          </div>
+                        ) : (
+                          <span style={{ color: "#484f58" }}>-</span>
+                        )}
+                      </td>
+                    )}
 
                     {/* Margin % + Deleverage zone */}
-                    <td style={{ padding: "6px 10px" }}>
+                    <td style={{ padding: isMobile ? "6px 4px" : "6px 10px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                        <span style={{ fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: p.marginCol }}>
+                        <span style={{ fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: p.marginCol, fontSize: isMobile ? 10 : undefined }}>
                           {(p.marginRatio * 100).toFixed(1)}%
                         </span>
                         <span style={{
@@ -441,25 +463,28 @@ export function PositionsTable({
                     </td>
 
                     {/* Close controls */}
-                    <td style={{ padding: "6px 10px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <div style={{ display: "flex", gap: 2 }}>
-                          {[25, 50, 100].map(pct => (
-                            <button key={pct} onClick={() => setClosePercent(pct)} style={{
-                              padding: "2px 5px", borderRadius: 3, fontSize: 9,
-                              border: `1px solid ${closePercent === pct ? "#ff5353" : "#1a1a1f"}`,
-                              background: closePercent === pct ? "#ff535318" : "transparent",
-                              color: closePercent === pct ? "#ff5353" : "#8b949e",
-                              cursor: "pointer",
-                            }}>{pct}%</button>
-                          ))}
-                        </div>
+                    <td style={{ padding: isMobile ? "6px 4px" : "6px 10px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 4 : 6 }}>
+                        {!isMobile && (
+                          <div style={{ display: "flex", gap: 2 }}>
+                            {[25, 50, 100].map(pct => (
+                              <button key={pct} onClick={() => setClosePercent(pct)} style={{
+                                padding: "2px 5px", borderRadius: 3, fontSize: 9,
+                                border: `1px solid ${closePercent === pct ? "#ff5353" : "#1a1a1f"}`,
+                                background: closePercent === pct ? "#ff535318" : "transparent",
+                                color: closePercent === pct ? "#ff5353" : "#8b949e",
+                                cursor: "pointer",
+                              }}>{pct}%</button>
+                            ))}
+                          </div>
+                        )}
                         <button
                           disabled={busy === p.marketSymbol}
                           onClick={() => closePosition(p.marketSymbol)}
                           style={{
-                            padding: "4px 10px", borderRadius: 6, border: "1px solid #30363d",
-                            background: "transparent", color: busy === p.marketSymbol ? "#8b949e" : "#ffffff", fontSize: 11,
+                            padding: isMobile ? "4px 8px" : "4px 10px", borderRadius: 6, border: "1px solid #30363d",
+                            background: "transparent", color: busy === p.marketSymbol ? "#8b949e" : "#ffffff",
+                            fontSize: isMobile ? 10 : 11,
                             cursor: busy === p.marketSymbol ? "not-allowed" : "pointer", whiteSpace: "nowrap",
                           }}
                           onMouseEnter={e => {
@@ -478,7 +503,7 @@ export function PositionsTable({
                         >
                           {busy === p.marketSymbol
                             ? <Spinner size={11} color="#8b8b94" />
-                            : closePercent < 100 ? `Close ${closePercent}%` : "Close"}
+                            : "Close"}
                         </button>
                       </div>
                     </td>

@@ -49,3 +49,11 @@ input  { font-family: inherit; }
   from { opacity: 0; transform: translateX(16px); }
   to   { opacity: 1; transform: translateX(0); }
 }
+
+/* ---- Mobile responsive overrides ---- */
+@media (max-width: 767px) {
+  html, body, #root { overflow: auto; }
+
+  /* Allow horizontal scroll on data tables */
+  table { display: block; overflow-x: auto; white-space: nowrap; }
+}

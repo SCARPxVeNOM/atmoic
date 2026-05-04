@@ -7,6 +7,7 @@ import { useToast, Spinner } from "./Toast";
 import { classifyError } from "../lib/errors";
 import { useYield } from "../hooks/useYield";
 import { useFundingRate } from "../hooks/useFundingRate";
+import { useIsMobile } from "../hooks/useIsMobile";
 
 const COLLATERAL = [
   { id: "SOL",  label: "SOL",  cut: 0  },
@@ -267,10 +268,14 @@ export function TradePanel({
     }
   };
 
+  const isMobile = useIsMobile();
+
   return (
     <div style={{
-      width: 340, flexShrink: 0,
-      background: C.bg, borderLeft: `1px solid ${C.border}`,
+      width: isMobile ? "100%" : 340, flexShrink: 0,
+      background: C.bg,
+      borderLeft: isMobile ? "none" : `1px solid ${C.border}`,
+      borderTop: isMobile ? `1px solid ${C.border}` : "none",
       display: "flex", flexDirection: "column", overflowY: "auto",
       fontFamily: SANS,
     }}>

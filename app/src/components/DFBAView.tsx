@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { VersionedTransaction } from "@solana/web3.js";
 import { useBatchQueue } from "../hooks/useBatchQueue";
+import { useIsMobile } from "../hooks/useIsMobile";
 import { API_BASE } from "../config";
 import { useToast, Spinner } from "./Toast";
 import { classifyError } from "../lib/errors";
@@ -80,6 +81,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
   const { publicKey, signTransaction } = useWallet();
   const { connection } = useConnection();
   const batchQueue = useBatchQueue();
+  const isMobile = useIsMobile();
 
   const oraclePrice = batchQueue?.oraclePrice ?? solPrice ?? 0;
 
@@ -152,12 +154,12 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
   };
 
   return (
-    <div style={{ flex: 1, overflowY: "auto", padding: 24, background: "#000" }}>
+    <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? 12 : 24, background: "#000" }}>
       {/* Page header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
+      <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", justifyContent: "space-between", alignItems: isMobile ? "stretch" : "flex-start", marginBottom: isMobile ? 16 : 24, gap: isMobile ? 10 : 0 }}>
         <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-            <h2 style={{ fontSize: 20, fontWeight: 700, color: "#ffffff", margin: 0 }}>DFBA Batch Auction</h2>
+          <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 10, marginBottom: 4, flexWrap: "wrap" }}>
+            <h2 style={{ fontSize: isMobile ? 17 : 20, fontWeight: 700, color: "#ffffff", margin: 0 }}>DFBA Batch Auction</h2>
             <span style={{
               fontSize: 11, padding: "2px 8px", borderRadius: 20,
               background: "rgba(88,166,255,0.12)", color: accent, border: `1px solid ${accent}30`,
@@ -169,7 +171,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
               </span>
             )}
           </div>
-          <p style={{ fontSize: 12, color: "#8b949e", margin: 0, maxWidth: 480 }}>
+          <p style={{ fontSize: isMobile ? 11 : 12, color: "#8b949e", margin: 0, maxWidth: 480 }}>
             Dual Flow Batch Auction &mdash; all orders in a 15-second window clear at a single uniform price.
             MEV-resistant &middot; no latency advantage &middot; makers compete on price only.
           </p>
@@ -178,7 +180,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
       </div>
 
       {/* Queues */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, marginBottom: 1, background: "#1a1a1f" }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 1, marginBottom: 1, background: "#1a1a1f" }}>
         <div style={{ background: "#0a0a0b", borderRadius: 0, padding: 16, border: "1px solid #1a1a1f" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
             <span style={{ fontSize: 13, fontWeight: 700, color: "#3fb68b", letterSpacing: "0.02em" }}>BID QUEUE</span>
@@ -210,24 +212,25 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
 
       {/* Pyth oracle center line */}
       <div style={{
-        display: "flex", alignItems: "center", gap: 12, padding: "10px 16px",
-        background: "#0a0a0b", borderRadius: 0, border: "1px solid #1a1a1f", marginBottom: 1, fontSize: 12,
+        display: "flex", alignItems: "center", gap: isMobile ? 6 : 12, padding: isMobile ? "8px 10px" : "10px 16px",
+        background: "#0a0a0b", borderRadius: 0, border: "1px solid #1a1a1f", marginBottom: 1,
+        fontSize: isMobile ? 11 : 12, flexWrap: "wrap",
       }}>
         <span style={{ color: "#8b949e" }}>Pyth Oracle</span>
-        <span style={{ fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: accent, fontSize: 15 }}>${oraclePrice.toFixed(2)}</span>
+        <span style={{ fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: accent, fontSize: isMobile ? 13 : 15 }}>${oraclePrice.toFixed(2)}</span>
         <span style={{ color: "#1a1a1f" }}>&middot;</span>
         <span style={{ color: "#8b949e" }}>Cap &plusmn;0.3%</span>
         <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>
           ${(oraclePrice * (1 - CAP)).toFixed(2)} &ndash; ${(oraclePrice * (1 + CAP)).toFixed(2)}
         </span>
-        <span style={{ marginLeft: "auto", fontSize: 11, color: "#8b949e" }}>Orders outside cap are rejected</span>
+        {!isMobile && <span style={{ marginLeft: "auto", fontSize: 11, color: "#8b949e" }}>Orders outside cap are rejected</span>}
       </div>
 
       {/* Place order */}
-      <div style={{ background: "#0a0a0b", borderRadius: 0, padding: 20, border: "1px solid #1a1a1f", marginBottom: 1 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: "#ffffff", marginBottom: 14 }}>Place Order</div>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
-          <div>
+      <div style={{ background: "#0a0a0b", borderRadius: 0, padding: isMobile ? 12 : 20, border: "1px solid #1a1a1f", marginBottom: 1 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#ffffff", marginBottom: isMobile ? 10 : 14 }}>Place Order</div>
+        <div style={{ display: "flex", gap: isMobile ? 8 : 12, flexWrap: "wrap", alignItems: "flex-end", flexDirection: isMobile ? "column" : "row" }}>
+          <div style={{ width: isMobile ? "100%" : undefined }}>
             <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>Side</div>
             <div style={{ display: "flex" }}>
               {(["BID", "ASK"] as const).map(s => {
@@ -246,7 +249,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
             </div>
           </div>
 
-          <div style={{ flex: 1, minWidth: 120 }}>
+          <div style={{ flex: isMobile ? undefined : 1, minWidth: isMobile ? undefined : 120, width: isMobile ? "100%" : undefined }}>
             <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>Price ($)</div>
             <input value={price} onChange={e => setPrice(e.target.value)} style={{
               width: "100%", background: "#000", border: "1px solid #1a1a1f", borderRadius: 0,
@@ -255,7 +258,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
             }} />
           </div>
 
-          <div style={{ flex: 1, minWidth: 120 }}>
+          <div style={{ flex: isMobile ? undefined : 1, minWidth: isMobile ? undefined : 120, width: isMobile ? "100%" : undefined }}>
             <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>Size (USDC)</div>
             <input value={size} onChange={e => setSize(e.target.value)} style={{
               width: "100%", background: "#000", border: "1px solid #1a1a1f", borderRadius: 0,
@@ -269,6 +272,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
             onClick={placeOrder}
             style={{
               padding: "9px 24px", borderRadius: 0, border: "none",
+              width: isMobile ? "100%" : undefined,
               background: !publicKey || busy ? "#21262d" : orderSide === "BID" ? "#3fb68b" : "#ff5353",
               color: !publicKey || busy ? "#8b949e" : "#fff",
               fontSize: 13, fontWeight: 700,
@@ -285,7 +289,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
       </div>
 
       {/* Bottom row */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, background: "#1a1a1f" }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 1, background: "#1a1a1f" }}>
         <div style={{ background: "#0a0a0b", borderRadius: 0, padding: 14, border: "1px solid #1a1a1f" }}>
           <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Last Batch Result</div>
           <div style={{ fontSize: 13, lineHeight: 1.7 }}>

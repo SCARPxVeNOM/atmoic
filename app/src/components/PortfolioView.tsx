@@ -1,5 +1,6 @@
 import { PositionView } from "../hooks/usePosition";
 import { usePortfolioHealth, PortfolioHealth } from "../hooks/usePortfolioHealth";
+import { useIsMobile } from "../hooks/useIsMobile";
 
 const JLP_MINT = "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4";
 const MSOL_MINT = "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So";
@@ -22,6 +23,7 @@ export function PortfolioView({
   prices?: Record<string, number>;
 }) {
   const portfolio = usePortfolioHealth();
+  const isMobile = useIsMobile();
   const price = solPrice || 0;
 
   const openPositions = positions.filter((p) => p.isOpen);
@@ -85,15 +87,15 @@ export function PortfolioView({
   ];
 
   return (
-    <div style={{ flex: 1, overflowY: "auto", padding: 24, background: "#000" }}>
-      <h2 style={{ fontSize: 20, fontWeight: 700, color: "#ffffff", marginBottom: 20 }}>Portfolio Overview</h2>
+    <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? 12 : 24, background: "#000" }}>
+      <h2 style={{ fontSize: isMobile ? 17 : 20, fontWeight: 700, color: "#ffffff", marginBottom: isMobile ? 12 : 20 }}>Portfolio Overview</h2>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1, marginBottom: 1, background: "#1a1a1f" }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)", gap: 1, marginBottom: 1, background: "#1a1a1f" }}>
         {STATS.map(s => (
-          <div key={s.label} style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16 }}>
-            <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>{s.label}</div>
-            <div style={{ fontSize: 22, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: s.col || "#ffffff" }}>{s.val}</div>
-            {s.sub && <div style={{ fontSize: 12, color: s.col || "#8b949e", marginTop: 2 }}>{s.sub}</div>}
+          <div key={s.label} style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: isMobile ? 10 : 16 }}>
+            <div style={{ fontSize: isMobile ? 10 : 11, color: "#8b949e", marginBottom: isMobile ? 4 : 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>{s.label}</div>
+            <div style={{ fontSize: isMobile ? 16 : 22, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: s.col || "#ffffff" }}>{s.val}</div>
+            {s.sub && <div style={{ fontSize: isMobile ? 10 : 12, color: s.col || "#8b949e", marginTop: 2 }}>{s.sub}</div>}
           </div>
         ))}
       </div>
@@ -111,7 +113,7 @@ export function PortfolioView({
             <div style={{ width: `${phPct}%`, height: "100%", background: phCol, borderRadius: 0, transition: "all 0.3s" }} />
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 1, marginTop: 14, background: "#1a1a1f" }}>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: 1, marginTop: 14, background: "#1a1a1f" }}>
             <div style={{ background: "#0a0a0b", padding: "10px 0" }}>
               <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase" }}>Portfolio Margin</div>
               <div style={{ fontSize: 14, fontFamily: "IBM Plex Mono,monospace", color: "#ffffff", marginTop: 2 }}>
@@ -134,7 +136,7 @@ export function PortfolioView({
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: portfolio && portfolio.correlationMatrix.markets.length > 1 ? "1fr 1fr" : "1fr", gap: 1, background: "#1a1a1f" }}>
+      <div style={{ display: "grid", gridTemplateColumns: !isMobile && portfolio && portfolio.correlationMatrix.markets.length > 1 ? "1fr 1fr" : "1fr", gap: 1, background: "#1a1a1f" }}>
         {/* Correlation Matrix — always show with real static values */}
         {portfolio && portfolio.correlationMatrix.markets.length > 1 && (
           <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16 }}>
