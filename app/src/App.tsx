@@ -153,6 +153,7 @@ export const App: FC = () => {
         <div style={{
           display: "flex", alignItems: "center", gap: isMobile ? 4 : 0,
           width: isMobile ? "100%" : undefined,
+          flex: isMobile ? undefined : 1,
           overflowX: isMobile ? "auto" : undefined,
           flexShrink: 0,
         }}>
