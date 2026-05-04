@@ -791,9 +791,11 @@ app.get("/funding/history", (_req, res) => {
 const walletOrderHistory = new Map<string, { side: string; ts: number }>();
 const RATE_LIMIT_COOLDOWN_MS = 500; // 5 batches × 100ms
 
-app.post("/build-tx/place-order", async (req, res) => {
+// DFBA orders are off-chain only — no on-chain instruction exists.
+// Orders are tracked server-side and settled by the batch crank.
+app.post("/build-tx/place-order", async (req: any, res: any) => {
   try {
-    const { wallet, price, size, side } = req.body ?? {};
+    const { wallet, price, size, side, market } = req.body ?? {};
     if (!wallet || !price || !size || !side) {
       return res.status(400).json({ error: "wallet, price, size, side required" });
     }
@@ -807,75 +809,39 @@ app.post("/build-tx/place-order", async (req, res) => {
     }
     walletOrderHistory.set(wallet, { side, ts: now });
 
-    const user = new PublicKey(wallet);
-    const shardIdx = user.toBuffer()[0] % 8;
-    const [queueShard] = findQueueShardPda(0, side === "ask" ? 1 : 0, shardIdx);
-
-    const ix = buildPlaceOrderIx({
-      user,
-      queueShard,
-      price: BigInt(price),
-      size: BigInt(size),
-    });
-
-    const [{ blockhash, lastValidBlockHeight }, lookupTables] = await Promise.all([
-      connection.getLatestBlockhash(),
-      getAlt(),
-    ]);
-
-    const message = new TransactionMessage({
-      payerKey: user,
-      recentBlockhash: blockhash,
-      instructions: [ix],
-    }).compileToV0Message(lookupTables);
-
-    // Track order server-side for batch status
     const orderSide: "bid" | "ask" = side === "Long" || side === "BID" ? "bid" : "ask";
-    trackOrder(wallet, Number(price) / 1e6, Number(size) / 1e6, orderSide);
+    const priceUsd = Number(price) / 1e6;
+    const sizeUsd = Number(size) / 1e6;
+    const mkt = market || "SOL-PERP";
 
-    const vtx = new VersionedTransaction(message);
+    trackOrder(wallet, priceUsd, sizeUsd, orderSide);
+
     res.json({
-      tx: Buffer.from(vtx.serialize()).toString("base64"),
-      blockhash,
-      lastValidBlockHeight,
-      shard: shardIdx,
+      ok: true,
+      orderId: `${wallet.slice(0, 8)}-${now}`,
+      side: orderSide,
+      price: priceUsd,
+      size: sizeUsd,
+      market: mkt,
+      message: `${orderSide.toUpperCase()} order queued for next batch`,
     });
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
 });
 
-app.post("/build-tx/cancel-order", async (req, res) => {
+app.post("/build-tx/cancel-order", async (req: any, res: any) => {
   try {
     const { wallet, side } = req.body ?? {};
-    if (!wallet || !side) return res.status(400).json({ error: "wallet, side required" });
+    if (!wallet) return res.status(400).json({ error: "wallet required" });
 
-    const user = new PublicKey(wallet);
-    const shardIdx = user.toBuffer()[0] % 8;
-    const [queueShard] = findQueueShardPda(0, side === "ask" ? 1 : 0, shardIdx);
-
-    const ix = buildCancelOrderIx({ user, queueShard });
-
-    const [{ blockhash, lastValidBlockHeight }, lookupTables] = await Promise.all([
-      connection.getLatestBlockhash(),
-      getAlt(),
-    ]);
-
-    const message = new TransactionMessage({
-      payerKey: user,
-      recentBlockhash: blockhash,
-      instructions: [ix],
-    }).compileToV0Message(lookupTables);
-
-    // Track cancellation server-side
     const cancelSide: "bid" | "ask" | undefined = side === "Long" || side === "BID" ? "bid" : side === "Short" || side === "ASK" ? "ask" : undefined;
-    cancelUserOrders(wallet, cancelSide);
+    const removed = cancelUserOrders(wallet, cancelSide);
 
-    const vtx = new VersionedTransaction(message);
     res.json({
-      tx: Buffer.from(vtx.serialize()).toString("base64"),
-      blockhash,
-      lastValidBlockHeight,
+      ok: true,
+      removed,
+      message: `${removed} order(s) cancelled`,
     });
   } catch (e) {
     res.status(500).json({ error: String(e) });

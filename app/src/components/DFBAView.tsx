@@ -1,11 +1,16 @@
 import { useState, useEffect } from "react";
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { VersionedTransaction } from "@solana/web3.js";
+import { useWallet } from "@solana/wallet-adapter-react";
 import { useBatchQueue } from "../hooks/useBatchQueue";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { API_BASE } from "../config";
 import { useToast, Spinner } from "./Toast";
 import { classifyError } from "../lib/errors";
+
+const DFBA_MARKETS = [
+  { id: "SOL-PERP", label: "SOL" },
+  { id: "BTC-PERP", label: "BTC" },
+  { id: "ETH-PERP", label: "ETH" },
+];
 
 const CAP = 0.003;
 
@@ -73,17 +78,18 @@ function Countdown({ accentColor }: { accentColor: string }) {
 
 export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPrice?: number }) {
   const [orderSide, setOrderSide] = useState<"BID" | "ASK">("BID");
+  const [market, setMarket] = useState("SOL-PERP");
   const [price, setPrice] = useState("");
   const [size, setSize] = useState("500");
   const [busy, setBusy] = useState(false);
   const accent = accentColor || "#58a6ff";
   const toast = useToast();
-  const { publicKey, signTransaction } = useWallet();
-  const { connection } = useConnection();
+  const { publicKey } = useWallet();
   const batchQueue = useBatchQueue();
   const isMobile = useIsMobile();
 
   const oraclePrice = batchQueue?.oraclePrice ?? solPrice ?? 0;
+  const marketLabel = DFBA_MARKETS.find(m => m.id === market)?.label || "SOL";
 
   // Default price input to oracle price
   useEffect(() => {
@@ -96,8 +102,8 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
   const bidOrders = batchQueue?.bidOrders ?? [];
   const askOrders = batchQueue?.askOrders ?? [];
 
-  const sendTx = async (endpoint: string, body: any) => {
-    if (!publicKey || !signTransaction) throw new Error("Connect wallet first");
+  // DFBA orders are off-chain — simple POST, no wallet signing needed
+  const postApi = async (endpoint: string, body: any) => {
     const res = await fetch(`${API_BASE}${endpoint}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -105,28 +111,23 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
     });
     if (!res.ok) {
       const err = await res.json();
-      throw new Error(err.message ?? err.error ?? "Transaction failed");
+      throw new Error(err.message ?? err.error ?? "Request failed");
     }
-    const { tx: b64 } = await res.json();
-    const tx = VersionedTransaction.deserialize(Buffer.from(b64, "base64"));
-    const signed = await signTransaction(tx);
-    const sig = await connection.sendRawTransaction(signed.serialize());
-    await connection.confirmTransaction(sig, "confirmed");
-    return sig;
+    return res.json();
   };
 
   const placeOrder = async () => {
     if (!publicKey || !price || !size) return;
     setBusy(true);
     try {
-      const sig = await sendTx("/build-tx/place-order", {
+      const data = await postApi("/build-tx/place-order", {
         wallet: publicKey.toBase58(),
-        price: BigInt(Math.floor(Number(price) * 1e6)).toString(),
-        size: BigInt(Math.floor(Number(size) * 1e6)).toString(),
+        price: Math.floor(Number(price) * 1e6).toString(),
+        size: Math.floor(Number(size) * 1e6).toString(),
         side: orderSide === "BID" ? "Long" : "Short",
-        market: "SOL-PERP",
+        market,
       });
-      toast.success("Order Placed", `${orderSide} · ${sig.slice(0, 8)}…`);
+      toast.success("Order Queued", `${orderSide} ${marketLabel} · ${data.message}`);
     } catch (e: any) {
       const err = classifyError(e);
       toast.error(err.title, err.message);
@@ -139,12 +140,12 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
     if (!publicKey) return;
     setBusy(true);
     try {
-      const sig = await sendTx("/build-tx/cancel-order", {
+      const data = await postApi("/build-tx/cancel-order", {
         wallet: publicKey.toBase58(),
         side: orderSide === "BID" ? "Long" : "Short",
-        market: "SOL-PERP",
+        market,
       });
-      toast.success("Order Cancelled", sig.slice(0, 8) + "…");
+      toast.success("Orders Cancelled", data.message);
     } catch (e: any) {
       const err = classifyError(e);
       toast.error(err.title, err.message);
@@ -175,6 +176,21 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
             Dual Flow Batch Auction &mdash; all orders in a 15-second window clear at a single uniform price.
             MEV-resistant &middot; no latency advantage &middot; makers compete on price only.
           </p>
+          {/* Market selector */}
+          <div style={{ display: "flex", gap: 2, marginTop: 10 }}>
+            {DFBA_MARKETS.map(m => {
+              const active = market === m.id;
+              return (
+                <button key={m.id} onClick={() => setMarket(m.id)} style={{
+                  padding: "5px 14px", fontSize: 11, fontWeight: 600,
+                  border: `1px solid ${active ? "#26262e" : "#1a1a1f"}`,
+                  borderRadius: 0, background: active ? "#111114" : "transparent",
+                  color: active ? "#ffffff" : "#8b949e", cursor: "pointer",
+                  transition: "background 0.15s, color 0.15s",
+                }}>{m.label}-PERP</button>
+              );
+            })}
+          </div>
         </div>
         <Countdown accentColor={accent} />
       </div>
