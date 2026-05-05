@@ -14,6 +14,7 @@ import { DFBAView } from "./components/DFBAView";
 import { PortfolioView } from "./components/PortfolioView";
 import { SimplePanel } from "./components/SimplePanel";
 import { TweaksPanel, Tweaks } from "./components/TweaksPanel";
+import { OrderBook } from "./components/OrderBook";
 import { useTradeHistory } from "./hooks/useTradeHistory";
 
 const NAV_ITEMS = ["Trade", "DFBA", "Portfolio"] as const;
@@ -314,6 +315,7 @@ export const App: FC = () => {
                 fundingRate8h={funding?.rate8h}
               />
             </div>
+            <OrderBook activeMarket={activeMarket} solPrice={solPrice} />
             <TradePanel accentColor={accent} solPrice={solPrice} showProData={uiMode === "Pro"} activeMarket={activeMarket} prices={oraclePrices} />
           </div>
           {tweaks.showPositions && (
