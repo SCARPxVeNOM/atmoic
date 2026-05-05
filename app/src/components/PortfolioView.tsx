@@ -1,5 +1,6 @@
 import { PositionView } from "../hooks/usePosition";
 import { usePortfolioHealth, PortfolioHealth } from "../hooks/usePortfolioHealth";
+import { useTradeHistory, TradeRecord } from "../hooks/useTradeHistory";
 import { useIsMobile } from "../hooks/useIsMobile";
 
 const JLP_MINT = "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4";
@@ -10,6 +11,22 @@ function resolveCollateralLabel(mint: string): "SOL" | "JLP" | "mSOL" {
   if (mint === MSOL_MINT) return "mSOL";
   return "SOL";
 }
+
+function timeAgo(ts: number): string {
+  const diff = Math.floor(Date.now() / 1000) - ts;
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function fmtPrice(n: number): string {
+  if (n >= 1000) return n.toFixed(2);
+  if (n >= 1) return n.toFixed(4);
+  return n.toFixed(6);
+}
+
+const COLL_COLORS: Record<string, string> = { SOL: "#3fb68b", JLP: "#e2b85d", mSOL: "#38bdf8" };
 
 export function PortfolioView({
   accent,
@@ -23,6 +40,7 @@ export function PortfolioView({
   prices?: Record<string, number>;
 }) {
   const portfolio = usePortfolioHealth();
+  const tradeHistory = useTradeHistory();
   const isMobile = useIsMobile();
   const price = solPrice || 0;
 
@@ -31,7 +49,7 @@ export function PortfolioView({
 
   // Compute total collateral value across all open positions
   let totalValue = 0;
-  let totalPnl = 0;
+  let totalUnrealizedPnl = 0;
   const collBreakdown: Record<string, number> = { SOL: 0, JLP: 0, mSOL: 0 };
 
   for (const pos of openPositions) {
@@ -51,7 +69,7 @@ export function PortfolioView({
       } else {
         priceDelta = (price - entry) / entry;
       }
-      totalPnl += priceDelta * (perpSize / price) * side;
+      totalUnrealizedPnl += priceDelta * (perpSize / price) * side;
     }
 
     const collType = resolveCollateralLabel(pos.collateralMint);
@@ -60,12 +78,50 @@ export function PortfolioView({
 
   // Use portfolio hook values if available
   if (portfolio?.totalCollateralUsd) totalValue = portfolio.totalCollateralUsd;
-  const pnlPct = totalValue > 0 ? (totalPnl / totalValue) * 100 : 0;
+  const unrealizedPct = totalValue > 0 ? (totalUnrealizedPnl / totalValue) * 100 : 0;
+
+  // Trade history stats
+  const totalRealizedPnl = tradeHistory.reduce((s, t) => s + t.pnl, 0);
+  const totalVolume = tradeHistory.reduce((s, t) => s + t.size, 0);
+  const wins = tradeHistory.filter(t => t.pnl > 0).length;
+  const losses = tradeHistory.filter(t => t.pnl <= 0).length;
+  const winRate = tradeHistory.length > 0 ? (wins / tradeHistory.length) * 100 : 0;
+
+  // Per-market trade breakdown
+  const marketBreakdown: Record<string, { trades: number; pnl: number; volume: number; wins: number }> = {};
+  for (const t of tradeHistory) {
+    const mkt = t.market || "Unknown";
+    if (!marketBreakdown[mkt]) marketBreakdown[mkt] = { trades: 0, pnl: 0, volume: 0, wins: 0 };
+    marketBreakdown[mkt].trades++;
+    marketBreakdown[mkt].pnl += t.pnl;
+    marketBreakdown[mkt].volume += t.size;
+    if (t.pnl > 0) marketBreakdown[mkt].wins++;
+  }
+
+  // Per-collateral trade breakdown
+  const collTradeBreakdown: Record<string, { trades: number; pnl: number; volume: number }> = {};
+  for (const t of tradeHistory) {
+    const ct = t.collateralType || "SOL";
+    if (!collTradeBreakdown[ct]) collTradeBreakdown[ct] = { trades: 0, pnl: 0, volume: 0 };
+    collTradeBreakdown[ct].trades++;
+    collTradeBreakdown[ct].pnl += t.pnl;
+    collTradeBreakdown[ct].volume += t.size;
+  }
 
   const STATS = [
     { label: "Total Value", val: `$${totalValue.toFixed(2)}`, sub: null, col: undefined },
-    { label: "Unrealized PnL", val: `${totalPnl >= 0 ? "+" : ""}$${totalPnl.toFixed(2)}`, sub: `${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%`, col: totalPnl >= 0 ? "#3fb68b" : "#ff5353" },
-    { label: "Open Positions", val: String(openPositions.length), sub: null, col: undefined },
+    {
+      label: "Unrealized PnL",
+      val: `${totalUnrealizedPnl >= 0 ? "+" : ""}$${totalUnrealizedPnl.toFixed(2)}`,
+      sub: `${unrealizedPct >= 0 ? "+" : ""}${unrealizedPct.toFixed(2)}%`,
+      col: totalUnrealizedPnl >= 0 ? "#3fb68b" : "#ff5353",
+    },
+    {
+      label: "Realized PnL",
+      val: `${totalRealizedPnl >= 0 ? "+" : ""}$${totalRealizedPnl.toFixed(4)}`,
+      sub: tradeHistory.length > 0 ? `${tradeHistory.length} trades` : null,
+      col: totalRealizedPnl >= 0 ? "#3fb68b" : "#ff5353",
+    },
     {
       label: "Margin Savings",
       val: portfolio ? `$${portfolio.savingsUsd.toFixed(2)}` : "$0.00",
@@ -75,7 +131,7 @@ export function PortfolioView({
   ];
 
   const phBps = portfolio?.portfolioHealthBps ?? 10000;
-  const phPct = Math.min(100, (phBps / 200)); // scale for bar
+  const phPct = Math.min(100, (phBps / 200));
   const phCol = phBps > 1500 ? "#3fb68b" : phBps > 800 ? "#d29922" : "#ff5353";
 
   // Collateral breakdown percentages
@@ -90,6 +146,7 @@ export function PortfolioView({
     <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? 12 : 24, background: "#000" }}>
       <h2 style={{ fontSize: isMobile ? 17 : 20, fontWeight: 700, color: "#ffffff", marginBottom: isMobile ? 12 : 20 }}>Portfolio Overview</h2>
 
+      {/* Top Stats */}
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)", gap: 1, marginBottom: 1, background: "#1a1a1f" }}>
         {STATS.map(s => (
           <div key={s.label} style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: isMobile ? 10 : 16 }}>
@@ -98,6 +155,33 @@ export function PortfolioView({
             {s.sub && <div style={{ fontSize: isMobile ? 10 : 12, color: s.col || "#8b949e", marginTop: 2 }}>{s.sub}</div>}
           </div>
         ))}
+      </div>
+
+      {/* Trading Stats Row */}
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)", gap: 1, marginBottom: 1, background: "#1a1a1f" }}>
+        <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", padding: isMobile ? 10 : 16 }}>
+          <div style={{ fontSize: isMobile ? 10 : 11, color: "#8b949e", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Open Positions</div>
+          <div style={{ fontSize: isMobile ? 16 : 22, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: "#ffffff" }}>{openPositions.length}</div>
+        </div>
+        <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", padding: isMobile ? 10 : 16 }}>
+          <div style={{ fontSize: isMobile ? 10 : 11, color: "#8b949e", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Total Trades</div>
+          <div style={{ fontSize: isMobile ? 16 : 22, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: "#ffffff" }}>{tradeHistory.length}</div>
+        </div>
+        <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", padding: isMobile ? 10 : 16 }}>
+          <div style={{ fontSize: isMobile ? 10 : 11, color: "#8b949e", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Win Rate</div>
+          <div style={{ fontSize: isMobile ? 16 : 22, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: winRate >= 50 ? "#3fb68b" : winRate > 0 ? "#ff5353" : "#8b949e" }}>
+            {winRate.toFixed(1)}%
+          </div>
+          {tradeHistory.length > 0 && (
+            <div style={{ fontSize: 11, color: "#8b949e", marginTop: 2 }}>{wins}W / {losses}L</div>
+          )}
+        </div>
+        <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", padding: isMobile ? 10 : 16 }}>
+          <div style={{ fontSize: isMobile ? 10 : 11, color: "#8b949e", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>Total Volume</div>
+          <div style={{ fontSize: isMobile ? 16 : 22, fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: "#ffffff" }}>
+            ${totalVolume.toFixed(2)}
+          </div>
+        </div>
       </div>
 
       {/* Portfolio Health Bar */}
@@ -136,8 +220,8 @@ export function PortfolioView({
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: !isMobile && portfolio && portfolio.correlationMatrix.markets.length > 1 ? "1fr 1fr" : "1fr", gap: 1, background: "#1a1a1f" }}>
-        {/* Correlation Matrix — always show with real static values */}
+      {/* Correlation Matrix + Collateral Breakdown */}
+      <div style={{ display: "grid", gridTemplateColumns: !isMobile && portfolio && portfolio.correlationMatrix.markets.length > 1 ? "1fr 1fr" : "1fr", gap: 1, marginBottom: 1, background: "#1a1a1f" }}>
         {portfolio && portfolio.correlationMatrix.markets.length > 1 && (
           <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: "#ffffff", marginBottom: 14 }}>Correlation Matrix</div>
@@ -170,14 +254,13 @@ export function PortfolioView({
           </div>
         )}
 
-        {/* Collateral Breakdown — computed from actual positions */}
         <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: "#ffffff", marginBottom: 14 }}>Collateral Breakdown</div>
           {collItems.map(([name, pct, frac]) => (
             <div key={name} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, fontSize: 13 }}>
-              <span style={{ color: "#8b949e", width: 36 }}>{name}</span>
+              <span style={{ color: COLL_COLORS[name] || "#8b949e", width: 36, fontWeight: 600 }}>{name}</span>
               <div style={{ flex: 1, background: "#1a1a1f", borderRadius: 0, height: 6 }}>
-                <div style={{ width: `${frac * 100}%`, height: "100%", background: accent, borderRadius: 0 }} />
+                <div style={{ width: `${frac * 100}%`, height: "100%", background: COLL_COLORS[name] || accent, borderRadius: 0 }} />
               </div>
               <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#ffffff", width: 32, textAlign: "right" }}>{pct}</span>
             </div>
@@ -185,10 +268,76 @@ export function PortfolioView({
         </div>
       </div>
 
-      {/* Per-position breakdown */}
+      {/* Per-Market Performance */}
+      {Object.keys(marketBreakdown).length > 0 && (
+        <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16, marginBottom: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#ffffff", marginBottom: 14 }}>Performance by Market</div>
+          <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #1a1a1f" }}>
+                {["Market", "Trades", "Win Rate", "Volume", "Realized PnL"].map(h => (
+                  <th key={h} style={{ padding: "6px 8px", color: "#8b949e", fontWeight: 600, textAlign: "left", textTransform: "uppercase", fontSize: 10 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(marketBreakdown).map(([mkt, data]) => {
+                const mktWinRate = data.trades > 0 ? (data.wins / data.trades) * 100 : 0;
+                return (
+                  <tr key={mkt} style={{ borderBottom: "1px solid #1a1a1f" }}>
+                    <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff", fontWeight: 600 }}>{mkt}</td>
+                    <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>{data.trades}</td>
+                    <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: mktWinRate >= 50 ? "#3fb68b" : "#ff5353" }}>{mktWinRate.toFixed(1)}%</td>
+                    <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>${data.volume.toFixed(2)}</td>
+                    <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", fontWeight: 600, color: data.pnl >= 0 ? "#3fb68b" : "#ff5353" }}>
+                      {data.pnl >= 0 ? "+" : ""}${data.pnl.toFixed(4)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Per-Collateral Performance */}
+      {Object.keys(collTradeBreakdown).length > 0 && (
+        <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16, marginBottom: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#ffffff", marginBottom: 14 }}>Performance by Collateral</div>
+          <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #1a1a1f" }}>
+                {["Collateral", "Trades", "Volume", "Realized PnL"].map(h => (
+                  <th key={h} style={{ padding: "6px 8px", color: "#8b949e", fontWeight: 600, textAlign: "left", textTransform: "uppercase", fontSize: 10 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(collTradeBreakdown).map(([ct, data]) => (
+                <tr key={ct} style={{ borderBottom: "1px solid #1a1a1f" }}>
+                  <td style={{ padding: "8px" }}>
+                    <span style={{
+                      fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 3,
+                      background: ct === "JLP" ? "rgba(226,184,93,0.15)" : ct === "mSOL" ? "rgba(56,189,248,0.15)" : "rgba(63,182,139,0.15)",
+                      color: COLL_COLORS[ct] || "#8b949e",
+                    }}>{ct}</span>
+                  </td>
+                  <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>{data.trades}</td>
+                  <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>${data.volume.toFixed(2)}</td>
+                  <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", fontWeight: 600, color: data.pnl >= 0 ? "#3fb68b" : "#ff5353" }}>
+                    {data.pnl >= 0 ? "+" : ""}${data.pnl.toFixed(4)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Open Position Details */}
       {hasPositions && (
-        <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16, marginTop: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "#ffffff", marginBottom: 14 }}>Position Details</div>
+        <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16, marginBottom: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#ffffff", marginBottom: 14 }}>Open Position Details</div>
           <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid #1a1a1f" }}>
@@ -206,7 +355,6 @@ export function PortfolioView({
                 const sideLabel = pos.perpSide === 0 ? "Long" : "Short";
                 const sideCol = pos.perpSide === 0 ? "#3fb68b" : "#ff5353";
                 const isPower = pos.powerMilli === 2000;
-                // Derive market label from perpMarket pubkey
                 const FEED_LABELS: Record<string, string> = {
                   "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE": "SOL-PERP",
                   "4cSM2e6rvbGQUFiJbqytoVMi5GgghSMr8LwVrT9VPSPo": "BTC-PERP",
@@ -217,7 +365,15 @@ export function PortfolioView({
                   <tr key={i} style={{ borderBottom: "1px solid #1a1a1f" }}>
                     <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>{market}{isPower ? " \u00B2" : ""}</td>
                     <td style={{ padding: "8px", fontWeight: 600, color: sideCol }}>{sideLabel}</td>
-                    <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>{collAmt} {collType}</td>
+                    <td style={{ padding: "8px" }}>
+                      <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>{collAmt}</span>
+                      {" "}
+                      <span style={{
+                        fontSize: 10, fontWeight: 600, padding: "1px 4px", borderRadius: 3,
+                        background: collType === "JLP" ? "rgba(226,184,93,0.15)" : collType === "mSOL" ? "rgba(56,189,248,0.15)" : "rgba(63,182,139,0.15)",
+                        color: COLL_COLORS[collType] || "#8b949e",
+                      }}>{collType}</span>
+                    </td>
                     <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>${size}</td>
                     <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>${entry}</td>
                     <td style={{ padding: "8px", color: isPower ? "#e2b85d" : "#8b949e" }}>{isPower ? "Squeeth" : "Standard"}</td>
@@ -226,6 +382,75 @@ export function PortfolioView({
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Recent Trade History */}
+      {tradeHistory.length > 0 && (
+        <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", borderRadius: 0, padding: 16, marginBottom: 1 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#ffffff" }}>Recent Trade History</div>
+            <span style={{ fontSize: 11, color: "#8b949e" }}>{tradeHistory.length} trade{tradeHistory.length !== 1 ? "s" : ""}</span>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse", minWidth: isMobile ? 500 : undefined }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #1a1a1f" }}>
+                  {(isMobile
+                    ? ["Market", "Side", "Size", "PnL", "Time"]
+                    : ["Market", "Side", "Collateral", "Size", "Entry", "Exit", "PnL", "Close %", "Time"]
+                  ).map(h => (
+                    <th key={h} style={{ padding: "6px 8px", color: "#8b949e", fontWeight: 600, textAlign: "left", textTransform: "uppercase", fontSize: 10 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {tradeHistory.slice(0, 20).map((t, i) => {
+                  const sideCol = t.side === "Long" ? "#3fb68b" : "#ff5353";
+                  const pnlCol = t.pnl >= 0 ? "#3fb68b" : "#ff5353";
+                  return (
+                    <tr key={i} style={{ borderBottom: "1px solid #1a1a1f" }}>
+                      <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>{t.market}</td>
+                      <td style={{ padding: "8px", fontWeight: 600, color: sideCol }}>{t.side}</td>
+                      {!isMobile && (
+                        <td style={{ padding: "8px" }}>
+                          <span style={{
+                            fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 3,
+                            background: t.collateralType === "JLP" ? "rgba(226,184,93,0.15)" : t.collateralType === "mSOL" ? "rgba(56,189,248,0.15)" : "rgba(63,182,139,0.15)",
+                            color: COLL_COLORS[t.collateralType] || "#8b949e",
+                          }}>{t.collateralType}</span>
+                        </td>
+                      )}
+                      <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>${t.size.toFixed(2)}</td>
+                      {!isMobile && (
+                        <>
+                          <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>${fmtPrice(t.entryPrice)}</td>
+                          <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>${fmtPrice(t.exitPrice)}</td>
+                        </>
+                      )}
+                      <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", fontWeight: 600, color: pnlCol }}>
+                        {t.pnl >= 0 ? "+" : ""}${t.pnl.toFixed(4)}
+                      </td>
+                      {!isMobile && (
+                        <td style={{ padding: "8px", fontFamily: "IBM Plex Mono,monospace", color: "#8b949e" }}>
+                          {t.closeBps >= 10000 ? "Full" : `${(t.closeBps / 100).toFixed(0)}%`}
+                        </td>
+                      )}
+                      <td style={{ padding: "8px", color: "#8b949e" }}>{timeAgo(t.closedAt)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!hasPositions && tradeHistory.length === 0 && (
+        <div style={{ background: "#0a0a0b", border: "1px solid #1a1a1f", padding: 32, textAlign: "center", marginTop: 1 }}>
+          <div style={{ fontSize: 14, color: "#8b949e", marginBottom: 8 }}>No positions or trade history yet</div>
+          <div style={{ fontSize: 12, color: "#555" }}>Open a position on the Trade tab to get started</div>
         </div>
       )}
     </div>
