@@ -9,6 +9,9 @@ export interface BatchQueueView {
   lastBatchAt: number;
   clearingPrice: number;
   totalVolume: number;
+  lastFills: number;
+  lastMatchedBids: number;
+  lastMatchedAsks: number;
   oraclePrice: number;
   market: string;
 }

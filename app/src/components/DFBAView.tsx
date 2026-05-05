@@ -311,17 +311,47 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
       </div>
 
       {/* Bottom row */}
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 1, background: "#1a1a1f" }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: 1, background: "#1a1a1f" }}>
         <div style={{ background: "#0a0a0b", borderRadius: 0, padding: 14, border: "1px solid #1a1a1f" }}>
           <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Last Batch Result</div>
           <div style={{ fontSize: 13, lineHeight: 1.7 }}>
             <span style={{ color: "#8b949e" }}>Cleared @ </span>
             <span style={{ fontFamily: "IBM Plex Mono,monospace", color: accent, fontWeight: 700 }}>${fmtPrice(lastClearing)}</span>
-            <span style={{ color: "#8b949e" }}> &middot; Vol </span>
+          </div>
+          <div style={{ fontSize: 13, lineHeight: 1.7 }}>
+            <span style={{ color: "#8b949e" }}>Volume: </span>
             <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>
               ${batchQueue ? fmt(batchQueue.totalVolume) : "0"}
             </span>
           </div>
+          {batchQueue && batchQueue.lastFills > 0 && (
+            <div style={{ fontSize: 13, lineHeight: 1.7 }}>
+              <span style={{ color: "#8b949e" }}>Fills: </span>
+              <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#3fb68b" }}>
+                {batchQueue.lastFills}
+              </span>
+              <span style={{ color: "#8b949e", fontSize: 11 }}>
+                {" "}({batchQueue.lastMatchedBids}B / {batchQueue.lastMatchedAsks}A)
+              </span>
+            </div>
+          )}
+        </div>
+
+        <div style={{ background: "#0a0a0b", borderRadius: 0, padding: 14, border: "1px solid #1a1a1f" }}>
+          <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Batch Engine</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginBottom: 6 }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#3fb68b", display: "inline-block" }} />
+            <span style={{ color: "#3fb68b", fontWeight: 600 }}>Active</span>
+            <span style={{ color: "#8b949e", fontSize: 11 }}>&mdash; clearing every 15s</span>
+          </div>
+          <div style={{ fontSize: 11, color: "#8b949e", lineHeight: 1.6 }}>
+            Uniform price &middot; Pyth-capped &middot; Pro-rata fills
+          </div>
+          {batchQueue && batchQueue.lastBatchAt > 0 && (
+            <div style={{ fontSize: 10, color: "#4a4a52", marginTop: 4 }}>
+              Last clear: {Math.floor((Date.now() - batchQueue.lastBatchAt) / 1000)}s ago
+            </div>
+          )}
         </div>
 
         <div style={{ background: "#0a0a0b", borderRadius: 0, padding: 14, border: "1px solid #1a1a1f" }}>

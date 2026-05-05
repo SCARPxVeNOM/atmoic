@@ -94,12 +94,32 @@ interface PendingOrder {
 const pendingOrders: PendingOrder[] = [];
 const BATCH_WINDOW_MS = 15_000; // 15-second batch window
 
-let lastBatchResult: {
+export interface BatchFill {
+  user: string;
+  side: "bid" | "ask";
+  price: number;       // order price USD
+  size: number;        // filled notional USD
+  clearingPrice: number; // uniform clearing price USD
+  market: string;
+  timestamp: number;
+}
+
+interface PerMarketBatchResult {
   clearingPrice: number;
   totalVolume: number;
   fills: number;
+  matchedBids: number;
+  matchedAsks: number;
   timestamp: number;
-} = { clearingPrice: 0, totalVolume: 0, fills: 0, timestamp: 0 };
+}
+
+const lastBatchResults: Record<string, PerMarketBatchResult> = {};
+const recentFills: BatchFill[] = [];
+const MAX_FILL_HISTORY = 100;
+
+function getLastBatchResult(market: string): PerMarketBatchResult {
+  return lastBatchResults[market] || { clearingPrice: 0, totalVolume: 0, fills: 0, matchedBids: 0, matchedAsks: 0, timestamp: 0 };
+}
 
 /** Track an order placed via the API. */
 export function trackOrder(user: string, price: number, size: number, side: "bid" | "ask", market: string = "SOL-PERP"): void {
@@ -121,9 +141,15 @@ export function cancelUserOrders(user: string, side?: "bid" | "ask", market?: st
   return before - pendingOrders.length;
 }
 
-/** Record a batch clearing result. */
-export function recordBatchResult(clearingPrice: number, totalVolume: number, fills: number): void {
-  lastBatchResult = { clearingPrice, totalVolume, fills, timestamp: Date.now() };
+/** Record a batch clearing result for a specific market. */
+export function recordBatchResult(market: string, clearingPrice: number, totalVolume: number, fills: number, matchedBids: number, matchedAsks: number): void {
+  lastBatchResults[market] = { clearingPrice, totalVolume, fills, matchedBids, matchedAsks, timestamp: Date.now() };
+}
+
+/** Get recent fill history. */
+export function getRecentFills(market?: string, limit: number = 20): BatchFill[] {
+  const filtered = market ? recentFills.filter(f => f.market === market) : recentFills;
+  return filtered.slice(0, limit);
 }
 
 /** Get current batch queue status for the API, filtered by market. */
@@ -135,6 +161,9 @@ export function getBatchStatus(oraclePrice: number, market: string = "SOL-PERP")
   lastBatchAt: number;
   clearingPrice: number;
   totalVolume: number;
+  lastFills: number;
+  lastMatchedBids: number;
+  lastMatchedAsks: number;
   oraclePrice: number;
   market: string;
 } {
@@ -153,17 +182,96 @@ export function getBatchStatus(oraclePrice: number, market: string = "SOL-PERP")
     .sort((a, b) => a.price - b.price)
     .map(o => ({ price: o.price, size: o.size }));
 
+  const lbr = getLastBatchResult(market);
   return {
     bids: bidOrders.length,
     asks: askOrders.length,
     bidOrders,
     askOrders,
-    lastBatchAt: lastBatchResult.timestamp,
-    clearingPrice: lastBatchResult.clearingPrice || oraclePrice,
-    totalVolume: lastBatchResult.totalVolume,
+    lastBatchAt: lbr.timestamp,
+    clearingPrice: lbr.clearingPrice || oraclePrice,
+    totalVolume: lbr.totalVolume,
+    lastFills: lbr.fills,
+    lastMatchedBids: lbr.matchedBids,
+    lastMatchedAsks: lbr.matchedAsks,
     oraclePrice,
     market,
   };
+}
+
+/**
+ * Run a single batch clearing cycle for a specific market.
+ * Converts pending orders to Order[]s, runs mergeShardsAndClear(),
+ * records results, removes filled orders, and stores fill history.
+ *
+ * @returns number of fills executed
+ */
+export function runBatchClearing(market: string, oraclePrice6dp: bigint): number {
+  const now = Date.now();
+  const windowStart = now - BATCH_WINDOW_MS;
+
+  // Collect current-window orders for this market
+  const marketOrders = pendingOrders.filter(o => o.timestamp >= windowStart && o.market === market);
+
+  if (marketOrders.length === 0) {
+    // No orders — record empty batch
+    recordBatchResult(market, Number(oraclePrice6dp) / 1e6, 0, 0, 0, 0);
+    return 0;
+  }
+
+  // Convert PendingOrder → Order (bigint 6dp format)
+  const orders: Order[] = marketOrders.map(o => ({
+    user: o.user,
+    price: BigInt(Math.round(o.price * 1e6)),
+    size: BigInt(Math.round(o.size * 1e6)),
+    side: o.side,
+    timestamp: o.timestamp,
+  }));
+
+  // Build a single shard (all orders in one array)
+  const result = mergeShardsAndClear([orders], oraclePrice6dp);
+
+  const clearingPriceUsd = Number(result.clearingPrice) / 1e6;
+  const totalVolumeUsd = Number(result.totalVolume) / 1e6;
+  const fillCount = result.fills.length;
+
+  // Track which users got filled so we can remove their pending orders
+  const filledUsers = new Set<string>();
+  let matchedBids = 0;
+  let matchedAsks = 0;
+
+  for (const fill of result.fills) {
+    filledUsers.add(`${fill.user}-${fill.side}`);
+    if (fill.side === "bid") matchedBids++;
+    else matchedAsks++;
+
+    // Store fill in history
+    recentFills.unshift({
+      user: fill.user,
+      side: fill.side,
+      price: Number(fill.price) / 1e6,
+      size: Number(fill.size) / 1e6,
+      clearingPrice: clearingPriceUsd,
+      market,
+      timestamp: now,
+    });
+  }
+
+  // Trim fill history
+  while (recentFills.length > MAX_FILL_HISTORY) recentFills.pop();
+
+  // Remove filled orders from pending queue
+  for (let i = pendingOrders.length - 1; i >= 0; i--) {
+    const o = pendingOrders[i];
+    if (o.market === market && filledUsers.has(`${o.user}-${o.side}`)) {
+      pendingOrders.splice(i, 1);
+    }
+  }
+
+  // Record result
+  recordBatchResult(market, clearingPriceUsd, totalVolumeUsd, fillCount, matchedBids, matchedAsks);
+
+  return fillCount;
 }
 
 export function routeToShard(userPubkey: string): number {

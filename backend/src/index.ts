@@ -6,6 +6,7 @@ import { startDepMonitor } from "./services/dep-monitor";
 import { startFundingCollector } from "./lib/funding";
 import { startMsolMonitor } from "./services/msol-monitor";
 import { startFundingCrank } from "./services/funding-crank";
+import { startDfbaCrank } from "./services/dfba-crank";
 
 const log = pino({ transport: { target: "pino-pretty" } } as any);
 
@@ -13,6 +14,7 @@ async function main() {
   startApi();
   startFundingCollector(); // 15-min Pyth TWAP samples for funding rate (M-1)
   startFundingCrank();     // 8h crank that calls settle_funding on all open positions
+  startDfbaCrank();        // 15s batch clearing crank for DFBA order matching
   // Oracle relay is OFF by default on mainnet — Pyth publishers keep feeds
   // fresh without our help. Turn it on with `npm run oracle-relay` if we
   // start seeing OracleStale rejections.

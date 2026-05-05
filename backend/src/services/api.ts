@@ -44,7 +44,7 @@ import { compute8hTwap, computeFundingRate, computeEnhancedFundingRate, getFundi
 import { breakerState } from "./circuit-breaker";
 import { crankStats } from "./crank";
 import { fundingCrankStats } from "./funding-crank";
-import { getVpin, getVpinClassification, getBatchStatus, trackOrder, cancelUserOrders } from "../lib/dfba";
+import { getVpin, getVpinClassification, getBatchStatus, trackOrder, cancelUserOrders, getRecentFills } from "../lib/dfba";
 import { fetchJlpPrice } from "../lib/jlp";
 import { CollateralType } from "../lib/haircuts";
 import { checkCollateralCap, CollateralTotals } from "../lib/collateral-caps";
@@ -884,6 +884,17 @@ app.get("/batch/status", async (req, res) => {
     const { price6dp } = await fetchLatestPrice(feedId);
     const oraclePrice = Number(price6dp) / 1e6;
     res.json(getBatchStatus(oraclePrice, market));
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+// ---- DFBA recent fills ----
+app.get("/batch/fills", (req, res) => {
+  try {
+    const market = req.query.market as string | undefined;
+    const limit = Math.min(Number(req.query.limit) || 20, 50);
+    res.json(getRecentFills(market, limit));
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
