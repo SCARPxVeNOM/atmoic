@@ -87,6 +87,7 @@ interface PendingOrder {
   price: number;    // USD
   size: number;     // USD notional
   side: "bid" | "ask";
+  market: string;   // "SOL-PERP" | "BTC-PERP" | "ETH-PERP"
   timestamp: number;
 }
 
@@ -101,18 +102,19 @@ let lastBatchResult: {
 } = { clearingPrice: 0, totalVolume: 0, fills: 0, timestamp: 0 };
 
 /** Track an order placed via the API. */
-export function trackOrder(user: string, price: number, size: number, side: "bid" | "ask"): void {
-  pendingOrders.push({ user, price, size, side, timestamp: Date.now() });
+export function trackOrder(user: string, price: number, size: number, side: "bid" | "ask", market: string = "SOL-PERP"): void {
+  pendingOrders.push({ user, price, size, side, market, timestamp: Date.now() });
   // Prune orders older than 2 batch windows
   const cutoff = Date.now() - BATCH_WINDOW_MS * 2;
   while (pendingOrders.length > 0 && pendingOrders[0].timestamp < cutoff) pendingOrders.shift();
 }
 
 /** Remove a user's orders (cancel). */
-export function cancelUserOrders(user: string, side?: "bid" | "ask"): number {
+export function cancelUserOrders(user: string, side?: "bid" | "ask", market?: string): number {
   const before = pendingOrders.length;
   for (let i = pendingOrders.length - 1; i >= 0; i--) {
-    if (pendingOrders[i].user === user && (!side || pendingOrders[i].side === side)) {
+    const o = pendingOrders[i];
+    if (o.user === user && (!side || o.side === side) && (!market || o.market === market)) {
       pendingOrders.splice(i, 1);
     }
   }
@@ -124,8 +126,8 @@ export function recordBatchResult(clearingPrice: number, totalVolume: number, fi
   lastBatchResult = { clearingPrice, totalVolume, fills, timestamp: Date.now() };
 }
 
-/** Get current batch queue status for the API. */
-export function getBatchStatus(oraclePrice: number): {
+/** Get current batch queue status for the API, filtered by market. */
+export function getBatchStatus(oraclePrice: number, market: string = "SOL-PERP"): {
   bids: number;
   asks: number;
   bidOrders: { price: number; size: number }[];
@@ -134,11 +136,12 @@ export function getBatchStatus(oraclePrice: number): {
   clearingPrice: number;
   totalVolume: number;
   oraclePrice: number;
+  market: string;
 } {
   const now = Date.now();
-  // Only show orders from the current batch window
+  // Only show orders from the current batch window, filtered by market
   const windowStart = now - BATCH_WINDOW_MS;
-  const current = pendingOrders.filter(o => o.timestamp >= windowStart);
+  const current = pendingOrders.filter(o => o.timestamp >= windowStart && o.market === market);
 
   const bidOrders = current
     .filter(o => o.side === "bid")
@@ -159,6 +162,7 @@ export function getBatchStatus(oraclePrice: number): {
     clearingPrice: lastBatchResult.clearingPrice || oraclePrice,
     totalVolume: lastBatchResult.totalVolume,
     oraclePrice,
+    market,
   };
 }
 

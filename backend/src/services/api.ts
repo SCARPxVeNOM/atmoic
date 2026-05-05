@@ -836,7 +836,7 @@ app.post("/build-tx/place-order", async (req: any, res: any) => {
     const sizeUsd = Number(size) / 1e6;
     const mkt = market || "SOL-PERP";
 
-    trackOrder(wallet, priceUsd, sizeUsd, orderSide);
+    trackOrder(wallet, priceUsd, sizeUsd, orderSide, mkt);
 
     res.json({
       ok: true,
@@ -854,11 +854,11 @@ app.post("/build-tx/place-order", async (req: any, res: any) => {
 
 app.post("/build-tx/cancel-order", async (req: any, res: any) => {
   try {
-    const { wallet, side } = req.body ?? {};
+    const { wallet, side, market } = req.body ?? {};
     if (!wallet) return res.status(400).json({ error: "wallet required" });
 
     const cancelSide: "bid" | "ask" | undefined = side === "Long" || side === "BID" ? "bid" : side === "Short" || side === "ASK" ? "ask" : undefined;
-    const removed = cancelUserOrders(wallet, cancelSide);
+    const removed = cancelUserOrders(wallet, cancelSide, market);
 
     res.json({
       ok: true,
@@ -871,11 +871,19 @@ app.post("/build-tx/cancel-order", async (req: any, res: any) => {
 });
 
 // ---- DFBA batch queue status ----
-app.get("/batch/status", async (_req, res) => {
+const DFBA_FEED_IDS: Record<string, string> = {
+  "SOL-PERP": "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d",
+  "BTC-PERP": "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
+  "ETH-PERP": "ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace",
+};
+
+app.get("/batch/status", async (req, res) => {
   try {
-    const { price6dp } = await fetchLatestPrice();
+    const market = (req.query.market as string) || "SOL-PERP";
+    const feedId = DFBA_FEED_IDS[market] || DFBA_FEED_IDS["SOL-PERP"];
+    const { price6dp } = await fetchLatestPrice(feedId);
     const oraclePrice = Number(price6dp) / 1e6;
-    res.json(getBatchStatus(oraclePrice));
+    res.json(getBatchStatus(oraclePrice, market));
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }

@@ -15,6 +15,7 @@ const DFBA_MARKETS = [
 const CAP = 0.003;
 
 function fmt(n: number) { return n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n); }
+function fmtPrice(n: number) { return n >= 1000 ? n.toFixed(2) : n.toFixed(4); }
 
 function QueueRow({ price, size, side }: { price: number; size: number; side: "bid" | "ask" }) {
   const color = side === "bid" ? "#3fb68b" : "#ff5353";
@@ -29,7 +30,7 @@ function QueueRow({ price, size, side }: { price: number; size: number; side: "b
         background: side === "bid" ? "rgba(63,182,139,0.07)" : "rgba(255,83,83,0.07)",
       }} />
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, position: "relative" }}>
-        <span style={{ fontFamily: "IBM Plex Mono,monospace", color }}>${price.toFixed(2)}</span>
+        <span style={{ fontFamily: "IBM Plex Mono,monospace", color }}>${fmtPrice(price)}</span>
         <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>{fmt(size)}</span>
       </div>
     </div>
@@ -85,13 +86,18 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
   const accent = accentColor || "#58a6ff";
   const toast = useToast();
   const { publicKey } = useWallet();
-  const batchQueue = useBatchQueue();
+  const batchQueue = useBatchQueue(market);
   const isMobile = useIsMobile();
 
-  const oraclePrice = batchQueue?.oraclePrice ?? solPrice ?? 0;
+  const oraclePrice = batchQueue?.oraclePrice ?? (market === "SOL-PERP" ? (solPrice ?? 0) : 0);
   const marketLabel = DFBA_MARKETS.find(m => m.id === market)?.label || "SOL";
 
-  // Default price input to oracle price
+  // Reset and prefill price when market or oracle changes
+  useEffect(() => {
+    if (oraclePrice > 0) setPrice(oraclePrice.toFixed(2));
+  }, [market]);
+
+  // Update price input if empty and oracle becomes available
   useEffect(() => {
     if (!price && oraclePrice > 0) setPrice(oraclePrice.toFixed(2));
   }, [oraclePrice]);
@@ -233,11 +239,11 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
         fontSize: isMobile ? 11 : 12, flexWrap: "wrap",
       }}>
         <span style={{ color: "#8b949e" }}>Pyth Oracle</span>
-        <span style={{ fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: accent, fontSize: isMobile ? 13 : 15 }}>${oraclePrice.toFixed(2)}</span>
+        <span style={{ fontFamily: "IBM Plex Mono,monospace", fontWeight: 700, color: accent, fontSize: isMobile ? 13 : 15 }}>${fmtPrice(oraclePrice)}</span>
         <span style={{ color: "#1a1a1f" }}>&middot;</span>
         <span style={{ color: "#8b949e" }}>Cap &plusmn;0.3%</span>
         <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>
-          ${(oraclePrice * (1 - CAP)).toFixed(2)} &ndash; ${(oraclePrice * (1 + CAP)).toFixed(2)}
+          ${fmtPrice(oraclePrice * (1 - CAP))} &ndash; ${fmtPrice(oraclePrice * (1 + CAP))}
         </span>
         {!isMobile && <span style={{ marginLeft: "auto", fontSize: 11, color: "#8b949e" }}>Orders outside cap are rejected</span>}
       </div>
@@ -310,7 +316,7 @@ export function DFBAView({ accentColor, solPrice }: { accentColor: string; solPr
           <div style={{ fontSize: 10, color: "#8b949e", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Last Batch Result</div>
           <div style={{ fontSize: 13, lineHeight: 1.7 }}>
             <span style={{ color: "#8b949e" }}>Cleared @ </span>
-            <span style={{ fontFamily: "IBM Plex Mono,monospace", color: accent, fontWeight: 700 }}>${lastClearing.toFixed(2)}</span>
+            <span style={{ fontFamily: "IBM Plex Mono,monospace", color: accent, fontWeight: 700 }}>${fmtPrice(lastClearing)}</span>
             <span style={{ color: "#8b949e" }}> &middot; Vol </span>
             <span style={{ fontFamily: "IBM Plex Mono,monospace", color: "#ffffff" }}>
               ${batchQueue ? fmt(batchQueue.totalVolume) : "0"}
