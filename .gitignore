@@ -22,6 +22,9 @@ deploy-keypair.json
 backend/.env
 app/.env.local
 
+# Database (trade history)
+backend/data/
+
 # Temporary / generated
 tmp_*.json
 reserves.json

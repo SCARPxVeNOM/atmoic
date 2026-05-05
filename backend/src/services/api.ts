@@ -51,7 +51,7 @@ import { checkCollateralCap, CollateralTotals } from "../lib/collateral-caps";
 import { msolState } from "./msol-monitor";
 import { getCollateralYield } from "../lib/yield-tracker";
 import { computePortfolioMargin } from "../lib/portfolio-margin";
-import { recordTrade, getTradeHistory } from "../lib/trade-history";
+import { recordTrade, getTradeHistory, getWalletTradeCount } from "../lib/trade-history";
 
 const log = pino({ transport: { target: "pino-pretty" } } as any);
 
@@ -127,6 +127,28 @@ app.get("/trades/:wallet", (req, res) => {
     const wallet = req.params.wallet;
     const history = getTradeHistory(wallet);
     res.json(history);
+  } catch (e) {
+    res.status(400).json({ error: String(e) });
+  }
+});
+
+// Trade stats summary for a wallet
+app.get("/trades/:wallet/stats", (req, res) => {
+  try {
+    const wallet = req.params.wallet;
+    const history = getTradeHistory(wallet);
+    const wins = history.filter(t => t.pnl > 0).length;
+    const losses = history.filter(t => t.pnl <= 0).length;
+    const totalPnl = history.reduce((s, t) => s + t.pnl, 0);
+    const totalVolume = history.reduce((s, t) => s + t.size, 0);
+    res.json({
+      totalTrades: history.length,
+      wins,
+      losses,
+      winRate: history.length > 0 ? Math.round((wins / history.length) * 10000) / 100 : 0,
+      totalPnl: Math.round(totalPnl * 1e6) / 1e6,
+      totalVolume: Math.round(totalVolume * 100) / 100,
+    });
   } catch (e) {
     res.status(400).json({ error: String(e) });
   }
