@@ -60,23 +60,7 @@ Traditional Perp                    IDLExchange
 
 **Contracts indexed to price^p, delivering options-like convexity without expiry or strike management.** Based on [Paradigm Research, "Power Perpetuals" (2024)](https://www.paradigm.xyz/2021/08/power-perpetuals).
 
-```
-         PnL
-          │         Power (p=2)
-          │        ╱
-          │       ╱
-          │      ╱   Standard (p=1)
-          │     ╱  ╱
-          │    ╱  ╱
-          │   ╱  ╱
-          │  ╱  ╱
-          │ ╱  ╱
-──────────┼╱──╱──────────── Price
-          │╲ ╱
-          │ ╲╱
-          │  ╲
-          │   ╲
-```
+
 
 **Example:** If SOL moves +10%, a standard perp gains +10%. A power perp (p=2) gains **+21%** — because PnL = (exit² - entry²) / entry².
 
@@ -136,130 +120,42 @@ These are not independent features — they form an interlocking system:
 
 ```
                     ┌─────────────────────┐
-                    │   Self-Repaying      │
-                    │   (yield offsets      │
-                    │    funding costs)     │
+                    │   Self-Repaying     │
+                    │   (yield offsets    │
+                    │    funding costs)   │
                     └──────────┬──────────┘
                                │
               Yield-bearing collateral
               keeps margin healthier
                                │
                     ┌──────────▼──────────┐
-                    │   Gradual            │
-                    │   Deleveraging       │◄──── Fewer full liquidations
-                    │   (partial close     │      = smaller cascade risk
-                    │    by severity zone) │
+                    │   Gradual           │
+                    │   Deleveraging      │◄──── Fewer full liquidations
+                    │   (partial close    │      = smaller cascade risk
+                    │  by severity zone)  │
                     └──────────┬──────────┘
                                │
               Surviving positions contribute
               to portfolio-level hedging
                                │
                     ┌──────────▼──────────┐
-                    │   Portfolio           │
-                    │   Margining           │◄──── Correlated positions
-                    │   (cross-position     │      offset each other
-                    │    stress testing)    │
+                    │    Portfolio        │
+                    │     Margining       │◄──── Correlated positions
+                    │   (cross-position   │      offset each other
+                    │   stress testing)   │
                     └──────────┬──────────┘
                                │
               Freed margin capital enables
               more expressive positions
                                │
                     ┌──────────▼──────────┐
-                    │   Power Perpetuals    │
-                    │   (convex payoffs     │
-                    │    without options)   │
+                    │   Power Perpetuals  │
+                    │   (convex payoffs   │
+                    │    without options) │
                     └─────────────────────┘
 ```
 
 **Self-repaying** keeps positions alive longer → **gradual deleveraging** handles the ones that do decline gracefully → **portfolio margining** nets correlated risk across surviving positions → freed capital enables **power perps** with their higher margin requirements. Each primitive makes the others more effective.
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Frontend (React 18)                     │
-│  Phantom Wallet │ Privy Session Keys │ TradingView Charts       │
-│  Simple / Standard / Pro UI modes                               │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │ REST + WebSocket
-┌──────────────────────────▼──────────────────────────────────────┐
-│                      Backend (TypeScript)                        │
-│                                                                  │
-│  ┌─── API ───┐  ┌── Liquidator ──┐  ┌── Funding Crank ──┐     │
-│  │ REST + WS │  │ Health scanner │  │ 8h Pyth TWAP      │     │
-│  │ Tx builder│  │ Power-aware    │  │ RL-enhanced rates  │     │
-│  │ Portfolio  │  │ Partial close  │  │ Yield-offset calc  │     │
-│  └───────────┘  └────────────────┘  └────────────────────┘     │
-│                                                                  │
-│  ┌── DFBA Crank ──┐  ┌── Spread Engine ────┐  ┌── Circuit ──┐ │
-│  │ 15s batches    │  │ Avellaneda-Stoikov  │  │  Breaker    │ │
-│  │ 8 sharded Qs   │  │ VPIN toxicity      │  │  + Monitors │ │
-│  │ VPIN scoring   │  │ CUSUM regimes      │  └─────────────┘ │
-│  └────────────────┘  └─────────────────────┘                   │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │ Solana RPC
-┌──────────────────────────▼──────────────────────────────────────┐
-│              On-Chain Program (132 KB, Raw BPF Rust)             │
-│                                                                  │
-│  Instructions:                                                   │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐  │
-│  │initialize│ │atomic_   │ │atomic_   │ │   liquidate      │  │
-│  │          │ │  open    │ │  close   │ │ (power PnL +     │  │
-│  │          │ │(power_   │ │(power_   │ │  gradual delev.) │  │
-│  │          │ │ milli)   │ │ aware)   │ │                  │  │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────────────┘  │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐  │
-│  │settle_   │ │update_   │ │migrate_  │ │ DFBA: place/     │  │
-│  │ funding  │ │  config  │ │  config  │ │ cancel/execute/  │  │
-│  │          │ │          │ │ (V1→V4)  │ │ init_queue_shard │  │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────────────┘  │
-│                                                                  │
-│  State: GlobalConfig (492B, V4) │ Position (187B, V3)           │
-│  Oracle: Pyth (SOL/BTC/ETH) │ Switchboard fallback             │
-└─────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│           Formal Verification (Offline, Pre-Deploy)              │
-│  .qedspec → QEDGen → Lean 4 (18 theorems, 0 sorry)             │
-│                     → Proptest (28 harnesses)                    │
-│                     → Kani BMC (8 harnesses)                     │
-│  CI: .github/workflows/verify.yml runs all 3 layers on push     │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### On-Chain Program
-
-Written in raw `solana-program` — no Anchor runtime, no IDL overhead. SHA256-based 8-byte discriminators precomputed at compile time. Versioned state with backward-compatible deserialization (V1 → V2 → V3 → V4).
-
-**Key design decisions:**
-- **Multi-collateral with haircuts.** SOL (0%), mSOL (18%), JLP (25%) — each collateral type has a risk-appropriate haircut applied to margin calculations.
-- **JLP floor pricing.** JLP collateral uses `max(entry_price, current_price)` to prevent manipulation through price suppression.
-- **Directional skew protection.** Trades that *increase* skew past 90% are rejected; trades that *reduce* skew are always allowed (solves cold-start).
-- **On-chain OI tracking.** `total_long_oi` and `total_short_oi` tracked in GlobalConfig for real-time skew computation.
-
-### Backend Services
-
-Eight concurrent services launched from a single process:
-
-| Service | Interval | Purpose |
-|---------|----------|---------|
-| API | Continuous | REST + WebSocket, tx building, portfolio health |
-| Liquidator | 10s scan | Power-aware health checks, partial liquidation |
-| Funding Collector | 15 min | Pyth TWAP samples per market (8h rolling window) |
-| Funding Crank | 8h | On-chain `settle_funding` with yield offset |
-| DFBA Crank | 15s | Batch clearing with uniform pricing |
-| Circuit Breaker | 15s | Vault stress monitoring, price variance tracking |
-| Deposit Monitor | Continuous | Collateral flow tracking |
-| mSOL Monitor | Continuous | mSOL price sanity validation |
-
-### Frontend
-
-React 18 with three UI tiers:
-- **Simple** — "Open 5x Long SOL" (hides leverage/margin terminology)
-- **Standard** — Full feature set
-- **Pro** — DFBA internals, VPIN, clearing price, correlation matrix
 
 ---
 
@@ -319,15 +215,6 @@ Bounded model checking via CBMC exhaustively verifies all inputs within bounds:
 - 4 invariant preservation proofs
 - 2 guard enforcement proofs
 - 2 cover properties (reachability)
-
-### CI Pipeline
-
-`.github/workflows/verify.yml` runs all three layers on every push:
-```
-lean-proofs:    lake build → verify zero sorry
-proptest:       cargo test --test proptest (1000 cases)
-kani:           cargo kani per harness (SMT exhaustive)
-```
 
 ---
 
@@ -430,69 +317,6 @@ Large DFBA orders (>$10K notional) use commit-reveal to prevent frontrunning. Th
 | SOL/USD | `7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE` |
 | BTC/USD | `4cSM2e6rvbGQUFiJbqytoVMi5GgghSMr8LwVrT9VPSPo` |
 | ETH/USD | `42amVS4KgzR9rA28tkVYqVXjq9Qa8dcZQMbH5EYFX6XC` |
-
----
-
-## Local Development
-
-### Prerequisites
-
-- Rust + Solana CLI (v1.18.26)
-- Node.js 18+
-- Lean 4 (v4.30.0-rc2) — for formal verification only
-- Kani — for bounded model checking only (Linux/WSL)
-
-### Build the Program
-
-```bash
-cd programs/atomic_perps
-cargo build-sbf
-# Output: target/deploy/atomic_perps.so (132 KB)
-```
-
-### Verify Proofs
-
-```bash
-cd programs/atomic_perps/formal_verification
-lake build
-# All 18 theorems must compile with 0 errors, 0 sorry
-```
-
-### Run Property Tests
-
-```bash
-cd programs/atomic_perps/programs
-cargo test --test proptest -- --test-threads=1
-```
-
-### Run Kani (Linux/WSL)
-
-```bash
-cargo kani --tests
-```
-
-### Start Backend
-
-```bash
-cd backend
-cp .env.example .env    # Configure RPC, keypair path, Pyth API key
-npm install && npm run dev
-```
-
-### Start Frontend
-
-```bash
-cd app
-npm install && npm run dev
-```
-
-### Deploy
-
-```bash
-solana program deploy programs/atomic_perps/target/deploy/atomic_perps.so \
-  --program-id programs/atomic_perps/target/deploy/atomic_perps-keypair.json \
-  --keypair <your-authority-keypair>
-```
 
 ---
 
