@@ -1,10 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Solana-Mainnet-9945FF?style=flat-square&logo=solana" alt="Solana Mainnet" />
-  <img src="https://img.shields.io/badge/Lean_4-18/18_Proofs-brightgreen?style=flat-square" alt="Lean 4 Proofs" />
-  <img src="https://img.shields.io/badge/Binary-132_KB-blue?style=flat-square" alt="Binary Size" />
-  <img src="https://img.shields.io/badge/Anchor-None_(Raw_BPF)-orange?style=flat-square" alt="No Anchor" />
-  <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square" alt="MIT License" />
-</p>
+  </p>
 
 # IDLExchange
 
