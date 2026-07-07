@@ -12,6 +12,18 @@ A perps protocol that introduces *self-repaying perpetuals*, *power perpetuals* 
 
 ---
 
+## Demo
+
+<div align="center">
+
+[![OFFPAY Demo](https://img.youtube.com/vi/SIK8AdwMVOg/maxresdefault.jpg)](https://youtu.be/SIK8AdwMVOg)
+
+**Click the image above to watch the demo on YouTube**
+
+</div>
+
+---
+
 ## The Problem
 
 Perpetual futures dominate crypto derivatives — **$85.7 trillion** in volume (2025, CoinGlass). Yet the infrastructure is fundamentally broken:
